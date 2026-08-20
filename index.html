@@ -222,12 +222,20 @@ function renderTrades(rows) {
 }
 
 function renderWatchlist(rows) {
-  $("wl-count").textContent = `${rows.filter(r=>r.enabled).length} active`;
-  $("wl-chips").innerHTML = rows.map(r => `
-    <div class="chip ${r.enabled ? "" : "off"}" data-sym="${esc(r.symbol)}">
+  $("wl-count").textContent = `${rows.filter(r=>r.enabled && r.status !== "invalid").length} active`;
+  $("wl-chips").innerHTML = rows.map(r => {
+    const st = r.status || "pending";
+    const badge = st === "active" ? "✓" : st === "invalid" ? "⚠" : "⏳";
+    const badgeCls = st === "active" ? "up" : st === "invalid" ? "down" : "warn";
+    return `
+    <div class="chip ${r.enabled ? "" : "off"}" data-sym="${esc(r.symbol)}" title="${esc(r.status_note || st)}">
+      <span class="${badgeCls}">${badge}</span>
       <span onclick="toggleSym('${esc(r.symbol)}', ${r.enabled ? "false" : "true"})">${esc(r.symbol)}</span>
       <span class="x" title="remove" onclick="removeSym('${esc(r.symbol)}')">✕</span>
-    </div>`).join("") || `<div class="empty">empty — add a symbol</div>`;
+    </div>`;
+  }).join("") || `<div class="empty">empty — add a symbol</div>`;
+  const bad = rows.filter(r => r.status === "invalid");
+  if (bad.length) $("wl-chips").innerHTML += `<div class="empty" style="width:100%">⚠ ${bad.map(r=>esc(r.symbol)).join(", ")}: ${esc(bad[0].status_note || "not a tradable symbol")} — tap ✕ to clear</div>`;
 }
 
 async function needPass() {
@@ -236,10 +244,12 @@ async function needPass() {
 }
 async function addSym() {
   const sym = $("wl-input").value.trim().toUpperCase().replace(/[^A-Z.\-]/g,"");
-  if (!sym) return; if (!await needPass()) return;
-  const { error } = await sb.from("tb_watchlist").upsert({ symbol: sym, enabled: true }, { onConflict: "symbol" });
+  if (!sym) return;
+  if (!/^[A-Z]{1,5}([.\-][A-Z]{1,2})?$/.test(sym)) { toast(`"${sym}" doesn't look like a US ticker (1–5 letters)`); return; }
+  if (!await needPass()) return;
+  const { error } = await sb.from("tb_watchlist").upsert({ symbol: sym, enabled: true, status: "pending", status_note: "awaiting bot verification (next session or ~2 min if live)" }, { onConflict: "symbol" });
   if (error) return toast("Add failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
-  $("wl-input").value = ""; toast(`Added ${sym}`); load();
+  $("wl-input").value = ""; toast(`Added ${sym} — pending verification by the bot`); load();
 }
 async function toggleSym(sym, enabled) {
   if (!await needPass()) return;
