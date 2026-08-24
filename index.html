@@ -196,8 +196,8 @@ function renderStatus(s, positions) {
 function renderPositions(rows) {
   $("pos-count").textContent = rows.length;
   if (!rows.length) { $("positions").innerHTML = `<div class="empty">none open</div>`; return; }
-  $("positions").innerHTML = `<table><tr><th>Sym</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">Now</th><th class="r">P&amp;L</th></tr>` +
-    rows.map(p => `<tr><td><b>${esc(p.symbol)}</b></td><td class="r">${fmt(p.qty,0)}</td><td class="r">${fmt(p.avg_entry_price)}</td><td class="r">${fmt(p.current_price)}</td><td class="r ${cls(p.unrealized_pl)}">${signed(p.unrealized_pl)}<br><span class="sub">${signed(Number(p.unrealized_plpc)*100,2,true)}</span></td></tr>`).join("") + `</table>`;
+  $("positions").innerHTML = `<table><tr><th>Sym</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">Now</th><th class="r">P&amp;L</th><th></th></tr>` +
+    rows.map(p => `<tr><td><b>${esc(p.symbol)}</b></td><td class="r">${fmt(p.qty,0)}</td><td class="r">${fmt(p.avg_entry_price)}</td><td class="r">${fmt(p.current_price)}</td><td class="r ${cls(p.unrealized_pl)}">${signed(p.unrealized_pl)}<br><span class="sub">${signed(Number(p.unrealized_plpc)*100,2,true)}</span></td><td class="r"><button class="danger" style="padding:4px 12px;font-size:12px" onclick="closePos('${esc(p.symbol)}')">Close</button></td></tr>`).join("") + `</table>`;
 }
 
 function renderSignals(rows) {
@@ -262,6 +262,10 @@ async function removeSym(sym) {
   const { error } = await sb.from("tb_watchlist").delete().eq("symbol", sym);
   if (error) return toast("Remove failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   toast(`Removed ${sym}`); load();
+}
+function closePos(sym) {
+  sendCommand(`close:${sym}`,
+    `Close ${sym} now at market? Its stop/target orders are cancelled, the position exits, and trading continues (kill switch NOT engaged).`);
 }
 async function sendCommand(command, confirmText) {
   if (!await needPass()) return; if (confirmText && !confirm(confirmText)) return;
