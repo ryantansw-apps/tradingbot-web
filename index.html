@@ -129,6 +129,17 @@
       <button class="ghost" id="btn-release">Release</button>
     </div>
     <div class="sub" style="margin-top:8px">Commands are queued to the bot and confirmed on Telegram. Requires the operator passcode.</div>
+    <div style="margin-top:14px">
+      <div class="row" style="justify-content:space-between;align-items:baseline">
+        <b>Risk appetite</b><span class="sub" id="risk-current">current: neutral</span>
+      </div>
+      <input type="range" id="risk-slider" min="0" max="2" step="1" value="1" style="width:100%;margin-top:6px">
+      <div class="row" style="justify-content:space-between">
+        <span class="sub">Conservative</span><span class="sub">Neutral</span><span class="sub">Aggressive</span>
+      </div>
+      <div class="sub" id="risk-desc" style="margin-top:4px">Neutral: grade C+ setups, with-trend only (default).</div>
+      <div class="sub" style="margin-top:2px">Changes how picky the bot is. Risk per trade stays 0.5% in every mode.</div>
+    </div>
     <details style="margin-top:10px"><summary>Passcode</summary>
       <div class="row" style="margin-top:8px">
         <input type="password" id="pass" placeholder="operator passcode" style="text-transform:none">
@@ -263,6 +274,32 @@ async function removeSym(sym) {
   if (error) return toast("Remove failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   toast(`Removed ${sym}`); load();
 }
+const RISK_MODES = ["conservative", "neutral", "aggressive"];
+const RISK_DESC = {
+  conservative: "Conservative: only grade B+ setups that agree with the daily trend. Fewest, strongest cards (~179 trades/30d, +0.58R each in replay).",
+  neutral: "Neutral: grade C+ setups, with-trend only (default; ~228 trades/30d, +0.62R each in replay).",
+  aggressive: "Aggressive: grade C+ including counter-trend. Most cards, lower average quality (~421 trades/30d, +0.36R each in replay).",
+};
+$("risk-slider").oninput = () => {
+  $("risk-desc").textContent = RISK_DESC[RISK_MODES[$("risk-slider").value]];
+};
+$("risk-slider").onchange = async () => {
+  const mode = RISK_MODES[$("risk-slider").value];
+  await sendCommand(`risk:${mode}`, `Set risk appetite to ${mode.toUpperCase()}? ${RISK_DESC[mode]}`);
+  loadRiskMode();
+};
+async function loadRiskMode() {
+  const { data } = await sb.from("tb_commands").select("command,acked_at")
+    .like("command", "risk:%").order("id", { ascending: false }).limit(1);
+  if (!data || !data.length) return;
+  const mode = data[0].command.split(":")[1];
+  if (!RISK_MODES.includes(mode)) return;
+  $("risk-current").textContent = `current: ${mode}${data[0].acked_at ? "" : " (queued)"}`;
+  $("risk-slider").value = RISK_MODES.indexOf(mode);
+  $("risk-desc").textContent = RISK_DESC[mode];
+}
+loadRiskMode();
+
 function closePos(sym) {
   sendCommand(`close:${sym}`,
     `Close ${sym} now at market? Its stop/target orders are cancelled, the position exits, and trading continues (kill switch NOT engaged).`);
