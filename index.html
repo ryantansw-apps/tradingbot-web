@@ -131,6 +131,17 @@
     <div class="sub" style="margin-top:8px">Commands are queued to the bot and confirmed on Telegram. Requires the operator passcode.</div>
     <div style="margin-top:14px">
       <div class="row" style="justify-content:space-between;align-items:baseline">
+        <b>Trading mode</b><span class="sub" id="mode-current">current: manual</span>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost" id="btn-manual">Manual approve</button>
+        <button class="warn" id="btn-auto">Full auto</button>
+        <button class="ghost" id="btn-endday">End session now</button>
+      </div>
+      <div class="sub" style="margin-top:4px">Auto enters trades without your tap (paper account; every risk limit stays on). End session flattens everything and shuts the bot down; after its Telegram confirmation the laptop is safe to switch off. Positions left open past the 4:00 bell lose their bracket exits.</div>
+    </div>
+    <div style="margin-top:14px">
+      <div class="row" style="justify-content:space-between;align-items:baseline">
         <b>Risk appetite</b><span class="sub" id="risk-current">current: neutral</span>
       </div>
       <input type="range" id="risk-slider" min="0" max="2" step="1" value="1" style="width:100%;margin-top:6px">
@@ -288,6 +299,20 @@ $("risk-slider").onchange = async () => {
   await sendCommand(`risk:${mode}`, `Set risk appetite to ${mode.toUpperCase()}? ${RISK_DESC[mode]}`);
   loadRiskMode();
 };
+$("btn-auto").onclick = () => sendCommand("mode:auto",
+  "FULL AUTO: the bot will enter trades WITHOUT your approval (paper account, all risk limits stay active). Turn on?").then(loadExecMode);
+$("btn-manual").onclick = () => sendCommand("mode:manual",
+  "Back to manual: every trade will need your Approve tap. Confirm?").then(loadExecMode);
+$("btn-endday").onclick = () => sendCommand("endday",
+  "End the session now? Everything is flattened, the bot shuts down, and you can switch off after the Telegram confirmation.");
+async function loadExecMode() {
+  const { data } = await sb.from("tb_status").select("mode").eq("id", 1);
+  if (data && data.length && data[0].mode) {
+    $("mode-current").textContent = `current: ${data[0].mode}`;
+  }
+}
+loadExecMode();
+
 async function loadRiskMode() {
   const { data } = await sb.from("tb_commands").select("command,acked_at")
     .like("command", "risk:%").order("id", { ascending: false }).limit(1);
