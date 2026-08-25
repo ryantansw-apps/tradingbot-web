@@ -163,6 +163,16 @@
 </main>
 <div class="toast" id="toast"></div>
 
+<div id="confirm-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;align-items:center;justify-content:center;padding:20px">
+  <div style="background:var(--panel2,#1c2230);border:1px solid var(--line,#333);border-radius:12px;max-width:420px;width:100%;padding:18px">
+    <div style="font-weight:700;margin-bottom:8px">Please confirm</div>
+    <div id="confirm-text" class="sub" style="line-height:1.45;margin-bottom:14px"></div>
+    <div class="row" style="justify-content:flex-end;gap:8px">
+      <button class="ghost" id="confirm-no">Cancel</button>
+      <button class="danger" id="confirm-yes">Confirm</button>
+    </div>
+  </div>
+</div>
 <script>
 const SUPABASE_URL = "https://vjakuwkrgcopxztwnsfl.supabase.co";
 const SUPABASE_ANON = "sb_publishable_Ch4qxtAXdrzAGw5yMDbiAA_wKwnV-ev";
@@ -280,7 +290,7 @@ async function toggleSym(sym, enabled) {
   toast(`${sym} ${enabled ? "enabled" : "paused"}`); load();
 }
 async function removeSym(sym) {
-  if (!confirm(`Remove ${sym} from the watchlist?`)) return; if (!await needPass()) return;
+  if (!await askConfirm(`Remove ${sym} from the watchlist?`)) return; if (!await needPass()) return;
   const { error } = await sb.from("tb_watchlist").delete().eq("symbol", sym);
   if (error) return toast("Remove failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   toast(`Removed ${sym}`); load();
@@ -329,8 +339,22 @@ function closePos(sym) {
   sendCommand(`close:${sym}`,
     `Close ${sym} now at market? Its stop/target orders are cancelled, the position exits, and trading continues (kill switch NOT engaged).`);
 }
+function askConfirm(text) {
+  // In-app dialog with an explicit Confirm button: native confirm() is
+  // suppressed or barely visible in some mobile browsers / installed PWAs.
+  return new Promise(resolve => {
+    const overlay = $("confirm-overlay");
+    $("confirm-text").textContent = text;
+    overlay.style.display = "flex";
+    const done = ok => { overlay.style.display = "none";
+      $("confirm-yes").onclick = $("confirm-no").onclick = overlay.onclick = null; resolve(ok); };
+    $("confirm-yes").onclick = () => done(true);
+    $("confirm-no").onclick = () => done(false);
+    overlay.onclick = e => { if (e.target === overlay) done(false); };
+  });
+}
 async function sendCommand(command, confirmText) {
-  if (!await needPass()) return; if (confirmText && !confirm(confirmText)) return;
+  if (!await needPass()) return; if (confirmText && !await askConfirm(confirmText)) return;
   const { error } = await sb.from("tb_commands").insert({ command });
   if (error) return toast("Command failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   toast(`${command} queued — bot acks within 30 s (see Telegram)`);
