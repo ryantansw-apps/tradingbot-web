@@ -324,12 +324,19 @@ async function loadExecMode() {
 loadExecMode();
 
 async function loadRiskMode() {
-  const { data } = await sb.from("tb_commands").select("command,acked_at")
-    .like("command", "risk:%").order("id", { ascending: false }).limit(1);
-  if (!data || !data.length) return;
-  const mode = data[0].command.split(":")[1];
-  if (!RISK_MODES.includes(mode)) return;
-  $("risk-current").textContent = `current: ${mode}${data[0].acked_at ? "" : " (queued)"}`;
+  // tb_status.risk_mode is what the bot ACTUALLY runs (a command row is just
+  // history and desyncs after a data wipe); an unacked command shows as queued.
+  const [st, cmd] = await Promise.all([
+    sb.from("tb_status").select("risk_mode").eq("id", 1),
+    sb.from("tb_commands").select("command,acked_at").like("command", "risk:%")
+      .order("id", { ascending: false }).limit(1),
+  ]);
+  const active = st.data && st.data.length ? st.data[0].risk_mode : null;
+  const queued = cmd.data && cmd.data.length && !cmd.data[0].acked_at
+    ? cmd.data[0].command.split(":")[1] : null;
+  const mode = queued || active;
+  if (!mode || !RISK_MODES.includes(mode)) return;
+  $("risk-current").textContent = `current: ${mode}${queued ? " (queued)" : ""}`;
   $("risk-slider").value = RISK_MODES.indexOf(mode);
   $("risk-desc").textContent = RISK_DESC[mode];
 }
@@ -367,7 +374,8 @@ $("btn-flatten").onclick = () => sendCommand("flatten", "FLATTEN ALL: close ever
 $("btn-release").onclick = () => sendCommand("release", "Release the kill switch and resume trading?");
 $("pass-save").onclick = () => { localStorage.setItem(passKey, $("pass").value); sb = client(); toast("Passcode saved on this device"); $("pass").value = ""; };
 
-load(); setInterval(load, 15000);
+const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); };
+refreshAll(); setInterval(refreshAll, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 </script>
 </body>
