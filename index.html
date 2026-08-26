@@ -72,6 +72,18 @@
     .ctl { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     .foot { color: var(--muted); font-size: 11px; text-align: center; margin-top: 8px; }
+    .card h2 { cursor: pointer; user-select: none; }
+    .card h2 .chev { transition: transform .18s; display: inline-block; color: var(--muted); font-size: 10px; margin-left: 6px; }
+    .card.collapsed h2 .chev { transform: rotate(-90deg); }
+    .card.collapsed .cbody { display: none; }
+    .more { width: 100%; margin-top: 8px; background: var(--panel2); color: var(--muted);
+            border: 1px solid var(--line); font-size: 12.5px; padding: 8px; }
+    .mini { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .mini .stat .v { font-size: 16px; }
+    .mini .stat .k { font-size: 10.5px; }
+    .curve { width: 100%; height: 64px; margin: 10px 0 4px; display: block; }
+    .bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; margin-top: 4px; }
+    .bar > span { display: block; height: 100%; background: var(--accent); }
   </style>
 </head>
 <body>
@@ -87,43 +99,49 @@
   <div id="banners"></div>
 
   <div class="card">
-    <h2>P&amp;L <span class="sub" id="pnl-asof"></span></h2>
-    <div class="grid">
+    <h2 data-card="pnl">P&amp;L <span><span class="sub" id="pnl-asof"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody"><div class="grid">
       <div class="stat"><div class="k">Today</div><div class="v" id="day-pnl">—</div></div>
       <div class="stat"><div class="k">Unrealised</div><div class="v" id="unreal">—</div></div>
       <div class="stat"><div class="k">Since start ($100k)</div><div class="v" id="since">—</div></div>
       <div class="stat"><div class="k">Equity</div><div class="v small" id="equity">—</div></div>
-    </div>
+    </div></div>
+  </div>
+
+  <div class="card" id="card-perf">
+    <h2 data-card="perf">Performance <span><span class="sub" id="perf-n"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody" id="perf"></div>
   </div>
 
   <div class="card">
-    <h2>Watchlist <span class="sub" id="wl-count"></span></h2>
-    <div class="row">
+    <h2 data-card="watchlist">Watchlist <span><span class="sub" id="wl-count"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody"><div class="row">
       <input type="text" id="wl-input" placeholder="Add symbol e.g. QQQ" autocapitalize="characters" autocomplete="off">
       <button id="wl-add">Add</button>
     </div>
     <div class="chips" id="wl-chips"></div>
     <div class="sub" style="margin-top:8px">The bot picks up changes within ~2 minutes during a session, or at the next start.</div>
+    </div>
   </div>
 
   <div class="card">
-    <h2>Open positions <span class="sub" id="pos-count"></span></h2>
-    <div id="positions"></div>
+    <h2 data-card="positions">Open positions <span><span class="sub" id="pos-count"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody"><div id="positions"></div></div>
   </div>
 
   <div class="card">
-    <h2>Signals <span class="sub">latest 30</span></h2>
-    <div id="signals"></div>
+    <h2 data-card="signals">Signals <span><span class="sub" id="sig-count"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody"><div id="signals"></div></div>
   </div>
 
   <div class="card">
-    <h2>Closed trades <span class="sub" id="trades-sum"></span></h2>
-    <div id="trades"></div>
+    <h2 data-card="trades">Closed trades <span><span class="sub" id="trades-sum"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody"><div id="trades"></div></div>
   </div>
 
   <div class="card">
-    <h2>Controls</h2>
-    <div class="ctl">
+    <h2 data-card="controls">Controls <span class="chev">▾</span></h2>
+    <div class="cbody"><div class="ctl">
       <button class="danger" id="btn-kill">Kill switch</button>
       <button class="warn" id="btn-flatten">Flatten all</button>
       <button class="ghost" id="btn-release">Release</button>
@@ -157,6 +175,7 @@
         <button class="ghost" id="pass-save">Save</button>
       </div>
     </details>
+    </div>
   </div>
 
   <div class="foot">Paper trading · Alpaca · refreshes every 15 s</div>
@@ -192,6 +211,35 @@ const ago = (iso) => { if(!iso) return "—"; const s = (Date.now() - new Date(i
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let toastT; const toast = (m) => { $("toast").textContent = m; $("toast").classList.add("show"); clearTimeout(toastT); toastT = setTimeout(()=>$("toast").classList.remove("show"), 2400); };
 
+// Collapsible cards: state per card id in localStorage so the layout the
+// operator chose survives the 15 s refresh and app restarts.
+const collapseKey = "tb_collapsed";
+const collapsed = new Set(JSON.parse(localStorage.getItem(collapseKey) || "[]"));
+function wireCollapse() {
+  document.querySelectorAll(".card h2[data-card]").forEach(h => {
+    const card = h.parentElement, id = h.dataset.card;
+    if (collapsed.has(id)) card.classList.add("collapsed");
+    h.onclick = () => {
+      card.classList.toggle("collapsed");
+      card.classList.contains("collapsed") ? collapsed.add(id) : collapsed.delete(id);
+      localStorage.setItem(collapseKey, JSON.stringify([...collapsed]));
+    };
+  });
+}
+// Long lists stay short until asked: the operator reads the newest few and
+// expands only when digging.
+const shown = { signals: 6, trades: 8 };
+const LIMITS = { signals: 6, trades: 8 };
+function moreButton(kind, total) {
+  if (total <= shown[kind]) {
+    return shown[kind] > LIMITS[kind]
+      ? `<button class="more" onclick="showLess('${kind}')">Show fewer</button>` : "";
+  }
+  return `<button class="more" onclick="showMore('${kind}')">Show all ${total}</button>`;
+}
+function showMore(kind) { shown[kind] = 9999; load(); }
+function showLess(kind) { shown[kind] = LIMITS[kind]; load(); }
+
 async function load() {
   const [st, pos, sig, tr, wl] = await Promise.all([
     sb.from("tb_status").select("*").eq("id", 1).maybeSingle(),
@@ -204,6 +252,7 @@ async function load() {
   renderPositions(pos.data || []);
   renderSignals(sig.data || []);
   renderTrades(tr.data || []);
+  renderPerformance(tr.data || []);
   renderWatchlist(wl.data || []);
   $("clock").textContent = new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 }
@@ -233,8 +282,9 @@ function renderPositions(rows) {
 }
 
 function renderSignals(rows) {
+  $("sig-count").textContent = rows.length ? `${Math.min(shown.signals, rows.length)} of ${rows.length}` : "";
   if (!rows.length) { $("signals").innerHTML = `<div class="empty">no signals yet — they appear when a setup fires</div>`; return; }
-  $("signals").innerHTML = rows.map(s => `
+  $("signals").innerHTML = rows.slice(0, shown.signals).map(s => `
     <div class="sig">
       <div class="h">
         <div><span class="pill ${esc(s.direction)}">${esc((s.direction||"").toUpperCase())}</span> <b>${esc(s.symbol)}</b> <span class="sub">${esc(s.timeframe||"")}</span></div>
@@ -242,7 +292,7 @@ function renderSignals(rows) {
       </div>
       <div class="t">${new Date(s.ts).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})} · entry ${fmt(s.entry)} · stop ${fmt(s.stop)} · target ${fmt(s.target)} · R 1:${fmt(s.r_multiple,1)}</div>
       ${(s.setup_text || s.trade_text) ? `<details><summary>details</summary><pre>${esc(s.setup_text||"")}\n\n${esc(s.trade_text||"")}</pre></details>` : ""}
-    </div>`).join("");
+    </div>`).join("") + moreButton("signals", rows.length);
 }
 
 function renderTrades(rows) {
@@ -250,7 +300,103 @@ function renderTrades(rows) {
   const total = rows.reduce((a,t)=>a+Number(t.pnl||0),0), wins = rows.filter(t=>Number(t.pnl)>0).length;
   $("trades-sum").innerHTML = `<span class="${cls(total)}">${signed(total)}</span> · ${wins}/${rows.length} wins`;
   $("trades").innerHTML = `<table><tr><th>When</th><th>Sym</th><th>Setup</th><th class="r">Qty</th><th>Exit</th><th class="r">P&amp;L</th></tr>` +
-    rows.map(t => `<tr><td class="sub">${new Date(t.closed_at).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})}</td><td><b>${esc(t.symbol)}</b> <span class="sub">${esc(t.side||"")}</span></td><td>${t.grade ? `<span class="pill ${esc(t.grade)}">${esc(t.grade)}${t.confidence ? " · " + Math.round(Number(t.confidence)*100) + "%" : ""}</span>` : `<span class="sub">-</span>`}${t.adx ? `<br><span class="sub">ADX ${fmt(t.adx,0)}</span>` : ""}</td><td class="r">${fmt(t.qty,0)}</td><td class="sub">${esc((t.exit_how||"").split(" (")[0])}</td><td class="r ${cls(t.pnl)}">${signed(t.pnl)}<br><span class="sub">${signed(t.pnl_pct,2,true)}</span></td></tr>`).join("") + `</table>`;
+    rows.slice(0, shown.trades).map(t => `<tr><td class="sub">${new Date(t.closed_at).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})}</td><td><b>${esc(t.symbol)}</b> <span class="sub">${esc(t.side||"")}</span></td><td>${t.grade ? `<span class="pill ${esc(t.grade)}">${esc(t.grade)}${t.confidence ? " · " + Math.round(Number(t.confidence)*100) + "%" : ""}</span>` : `<span class="sub">-</span>`}${t.adx ? `<br><span class="sub">ADX ${fmt(t.adx,0)}</span>` : ""}</td><td class="r">${fmt(t.qty,0)}</td><td class="sub">${esc((t.exit_how||"").split(" (")[0])}</td><td class="r ${cls(t.pnl)}">${signed(t.pnl)}<br><span class="sub">${signed(t.pnl_pct,2,true)}</span></td></tr>`).join("") + `</table>` + moreButton("trades", rows.length);
+}
+
+// ---- analytics ------------------------------------------------------------
+// R = P&L / (qty x planned risk per share). R is the honest unit: it makes a
+// 398-share XLE trade and a 35-share QQQ trade directly comparable.
+function tradeR(t) {
+  const qty = Math.abs(Number(t.qty || 0)), rps = Number(t.risk_per_share || 0);
+  return qty && rps ? Number(t.pnl || 0) / (qty * rps) : null;
+}
+function groupStats(rows, keyOf) {
+  const out = {};
+  rows.forEach(t => {
+    const k = keyOf(t);
+    if (k == null || k === "") return;
+    const g = out[k] || (out[k] = { w: 0, l: 0, pnl: 0, r: 0, rn: 0 });
+    Number(t.pnl) > 0 ? g.w++ : g.l++;
+    g.pnl += Number(t.pnl || 0);
+    const r = tradeR(t);
+    if (r != null) { g.r += r; g.rn++; }
+  });
+  return out;
+}
+function groupTable(title, groups, order) {
+  const keys = order || Object.keys(groups).sort();
+  if (!keys.length) return "";
+  return `<div class="sub" style="margin-top:12px;margin-bottom:4px">${title}</div><table>` +
+    `<tr><th></th><th class="r">Trades</th><th class="r">Win</th><th class="r">P&amp;L</th><th class="r">Total R</th></tr>` +
+    keys.filter(k => groups[k]).map(k => { const g = groups[k], n = g.w + g.l;
+      return `<tr><td><b>${esc(k)}</b></td><td class="r">${n}</td><td class="r">${Math.round(g.w/n*100)}%` +
+        `<div class="bar"><span style="width:${Math.round(g.w/n*100)}%"></span></div></td>` +
+        `<td class="r ${cls(g.pnl)}">${signed(g.pnl,0)}</td>` +
+        `<td class="r ${cls(g.r)}">${g.rn ? signed(g.r,1) : "—"}</td></tr>`;
+    }).join("") + `</table>`;
+}
+function equityCurve(rows) {
+  // rows arrive newest-first; walk oldest-first for a cumulative P&L line.
+  const pts = [];
+  let cum = 0;
+  [...rows].reverse().forEach(t => { cum += Number(t.pnl || 0); pts.push(cum); });
+  if (pts.length < 2) return "";
+  const min = Math.min(0, ...pts), max = Math.max(0, ...pts), span = (max - min) || 1;
+  const x = i => (i / (pts.length - 1)) * 100;
+  const y = v => 100 - ((v - min) / span) * 100;
+  const line = pts.map((v, i) => `${x(i).toFixed(2)},${y(v).toFixed(2)}`).join(" ");
+  const zero = y(0).toFixed(2);
+  const colour = cum >= 0 ? "var(--up)" : "var(--down)";
+  return `<svg class="curve" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <line x1="0" y1="${zero}" x2="100" y2="${zero}" stroke="var(--line)" stroke-width="0.8" stroke-dasharray="2 2"/>
+      <polyline points="${line}" fill="none" stroke="${colour}" stroke-width="1.6"
+        vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    </svg><div class="sub">cumulative P&amp;L across ${pts.length} closed trades (oldest to newest)</div>`;
+}
+function renderPerformance(rows) {
+  $("perf-n").textContent = rows.length ? `${rows.length} trades` : "";
+  if (!rows.length) {
+    $("perf").innerHTML = `<div class="empty">no closed trades yet — analytics appear as trades complete</div>`;
+    return;
+  }
+  const n = rows.length;
+  const wins = rows.filter(t => Number(t.pnl) > 0), losses = rows.filter(t => Number(t.pnl) <= 0);
+  const pnl = rows.reduce((a, t) => a + Number(t.pnl || 0), 0);
+  const grossW = wins.reduce((a, t) => a + Number(t.pnl), 0);
+  const grossL = Math.abs(losses.reduce((a, t) => a + Number(t.pnl), 0));
+  const pf = grossL ? grossW / grossL : null;
+  const rs = rows.map(tradeR).filter(r => r != null);
+  const totR = rs.reduce((a, r) => a + r, 0);
+  const expR = rs.length ? totR / rs.length : null;
+  const avgW = wins.length ? grossW / wins.length : 0;
+  const avgL = losses.length ? grossL / losses.length : 0;
+  const best = rows.reduce((a, t) => Number(t.pnl) > Number(a.pnl) ? t : a, rows[0]);
+  const worst = rows.reduce((a, t) => Number(t.pnl) < Number(a.pnl) ? t : a, rows[0]);
+  // current streak, walking newest-first
+  let streak = 0, sw = Number(rows[0].pnl) > 0;
+  for (const t of rows) { if ((Number(t.pnl) > 0) !== sw) break; streak++; }
+
+  $("perf").innerHTML = equityCurve(rows) + `
+    <div class="mini" style="margin-top:10px">
+      <div class="stat"><div class="k">Net P&amp;L</div><div class="v ${cls(pnl)}">${signed(pnl,0)}</div></div>
+      <div class="stat"><div class="k">Win rate</div><div class="v">${Math.round(wins.length/n*100)}%<span class="sub"> ${wins.length}W-${losses.length}L</span></div></div>
+      <div class="stat"><div class="k">Expectancy</div><div class="v ${cls(expR)}">${expR == null ? "—" : signed(expR,2) + "R"}</div></div>
+      <div class="stat"><div class="k">Total R</div><div class="v ${cls(totR)}">${rs.length ? signed(totR,1) : "—"}</div></div>
+      <div class="stat"><div class="k">Profit factor</div><div class="v">${pf == null ? "—" : fmt(pf,2)}</div></div>
+      <div class="stat"><div class="k">Streak</div><div class="v ${sw ? "up" : "down"}">${streak}${sw ? "W" : "L"}</div></div>
+      <div class="stat"><div class="k">Avg win</div><div class="v up">${signed(avgW,0)}</div></div>
+      <div class="stat"><div class="k">Avg loss</div><div class="v down">${signed(-avgL,0)}</div></div>
+      <div class="stat"><div class="k">Best / worst</div><div class="v small"><span class="up">${signed(best.pnl,0)}</span> / <span class="down">${signed(worst.pnl,0)}</span></div></div>
+    </div>
+    ${expR != null && rs.length < 30 ? `<div class="sub" style="margin-top:8px">⚠ ${rs.length} trades is too few to judge an edge — the Phase 7 gate is 30+ with expectancy above 0R.</div>` : ""}
+    ${groupTable("By setup grade (does a better grade win?)", groupStats(rows, t => t.grade), ["A","B","C","D"])}
+    ${groupTable("By trend strength at entry (ADX)", groupStats(rows, t => {
+        const a = Number(t.adx || 0); if (!a) return null;
+        return a < 30 ? "ADX 25-30" : a < 40 ? "ADX 30-40" : a < 50 ? "ADX 40-50" : "ADX 50+";
+      }), ["ADX 25-30","ADX 30-40","ADX 40-50","ADX 50+"])}
+    ${groupTable("By symbol", groupStats(rows, t => t.symbol))}
+    ${groupTable("By direction", groupStats(rows, t => t.side), ["long","short"])}
+    ${groupTable("By exit", groupStats(rows, t => (t.exit_how || "").split(" (")[0]))}`;
 }
 
 function renderWatchlist(rows) {
@@ -374,6 +520,7 @@ $("btn-flatten").onclick = () => sendCommand("flatten", "FLATTEN ALL: close ever
 $("btn-release").onclick = () => sendCommand("release", "Release the kill switch and resume trading?");
 $("pass-save").onclick = () => { localStorage.setItem(passKey, $("pass").value); sb = client(); toast("Passcode saved on this device"); $("pass").value = ""; };
 
+wireCollapse();
 const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); };
 refreshAll(); setInterval(refreshAll, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
