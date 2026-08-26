@@ -249,8 +249,8 @@ function renderTrades(rows) {
   if (!rows.length) { $("trades").innerHTML = `<div class="empty">no closed trades yet</div>`; $("trades-sum").textContent = ""; return; }
   const total = rows.reduce((a,t)=>a+Number(t.pnl||0),0), wins = rows.filter(t=>Number(t.pnl)>0).length;
   $("trades-sum").innerHTML = `<span class="${cls(total)}">${signed(total)}</span> · ${wins}/${rows.length} wins`;
-  $("trades").innerHTML = `<table><tr><th>When</th><th>Sym</th><th class="r">Qty</th><th>Exit</th><th class="r">P&amp;L</th></tr>` +
-    rows.map(t => `<tr><td class="sub">${new Date(t.closed_at).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})}</td><td><b>${esc(t.symbol)}</b> <span class="sub">${esc(t.side||"")}</span></td><td class="r">${fmt(t.qty,0)}</td><td class="sub">${esc((t.exit_how||"").split(" (")[0])}</td><td class="r ${cls(t.pnl)}">${signed(t.pnl)}<br><span class="sub">${signed(t.pnl_pct,2,true)}</span></td></tr>`).join("") + `</table>`;
+  $("trades").innerHTML = `<table><tr><th>When</th><th>Sym</th><th>Setup</th><th class="r">Qty</th><th>Exit</th><th class="r">P&amp;L</th></tr>` +
+    rows.map(t => `<tr><td class="sub">${new Date(t.closed_at).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})}</td><td><b>${esc(t.symbol)}</b> <span class="sub">${esc(t.side||"")}</span></td><td>${t.grade ? `<span class="pill ${esc(t.grade)}">${esc(t.grade)}${t.confidence ? " · " + Math.round(Number(t.confidence)*100) + "%" : ""}</span>` : `<span class="sub">-</span>`}${t.adx ? `<br><span class="sub">ADX ${fmt(t.adx,0)}</span>` : ""}</td><td class="r">${fmt(t.qty,0)}</td><td class="sub">${esc((t.exit_how||"").split(" (")[0])}</td><td class="r ${cls(t.pnl)}">${signed(t.pnl)}<br><span class="sub">${signed(t.pnl_pct,2,true)}</span></td></tr>`).join("") + `</table>`;
 }
 
 function renderWatchlist(rows) {
@@ -297,9 +297,9 @@ async function removeSym(sym) {
 }
 const RISK_MODES = ["conservative", "neutral", "aggressive"];
 const RISK_DESC = {
-  conservative: "Conservative: only grade B+ setups that agree with the daily trend. Fewest, strongest cards (~179 trades/30d, +0.58R each in replay).",
-  neutral: "Neutral: grade C+ setups, with-trend only (default; ~228 trades/30d, +0.62R each in replay).",
-  aggressive: "Aggressive: grade C+ including counter-trend. Most cards, lower average quality (~421 trades/30d, +0.36R each in replay).",
+  conservative: "Conservative: strong trends only (ADX 40+) and with the daily trend. Fewest, best setups (replay: +0.74R each, ~18 signals/week).",
+  neutral: "Neutral: decent trends (ADX 30+) and with the daily trend (default; replay: +0.48R each, ~39 signals/week).",
+  aggressive: "Aggressive: any qualifying trend (ADX 25+), counter-trend allowed. Most signals, much lower quality (replay: +0.16R each, ~111 signals/week).",
 };
 $("risk-slider").oninput = () => {
   $("risk-desc").textContent = RISK_DESC[RISK_MODES[$("risk-slider").value]];
