@@ -154,9 +154,13 @@
       <div class="row" style="margin-top:6px">
         <button class="ghost" id="btn-manual">Manual approve</button>
         <button class="warn" id="btn-auto">Full auto</button>
-        <button class="ghost" id="btn-endday">End session now</button>
       </div>
-      <div class="sub" style="margin-top:4px">Auto enters trades without your tap (paper account; every risk limit stays on). End session flattens everything and shuts the bot down; after its Telegram confirmation the laptop is safe to switch off. Positions left open past the 4:00 bell lose their bracket exits.</div>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost" id="btn-endday">End session, leave trades</button>
+        <button class="warn" id="btn-endflat">Close all &amp; end</button>
+      </div>
+      <div class="sub" style="margin-top:4px">Auto enters trades without your tap (paper account; every risk limit stays on).<br>
+        <b>End session, leave trades</b> stops the bot but every open trade keeps its stop and target working at the broker, so it still ends on its own target or stop while your laptop is off. <b>Close all &amp; end</b> exits everything at market first. Cutting trades short at shutdown measured -76R to -139R over 45 days, so leaving them running is the default.</div>
     </div>
     <div style="margin-top:14px">
       <div class="row" style="justify-content:space-between;align-items:baseline">
@@ -372,6 +376,13 @@ function renderPerformance(rows) {
   const avgL = losses.length ? grossL / losses.length : 0;
   const best = rows.reduce((a, t) => Number(t.pnl) > Number(a.pnl) ? t : a, rows[0]);
   const worst = rows.reduce((a, t) => Number(t.pnl) < Number(a.pnl) ? t : a, rows[0]);
+  // Strategy exits are the ones the plan chose (target or stop). Forced exits
+  // (end-of-day, manual close) say more about the operator's schedule than
+  // about the edge, so they are measured separately.
+  const isStrategyExit = t => /take-profit|stop-loss/.test(t.exit_how || "");
+  const stratRs = rows.filter(isStrategyExit).map(tradeR).filter(r => r != null);
+  const forced = rows.filter(t => !isStrategyExit(t));
+  const stratExp = stratRs.length ? stratRs.reduce((a, r) => a + r, 0) / stratRs.length : null;
   // current streak, walking newest-first
   let streak = 0, sw = Number(rows[0].pnl) > 0;
   for (const t of rows) { if ((Number(t.pnl) > 0) !== sw) break; streak++; }
@@ -388,7 +399,8 @@ function renderPerformance(rows) {
       <div class="stat"><div class="k">Avg loss</div><div class="v down">${signed(-avgL,0)}</div></div>
       <div class="stat"><div class="k">Best / worst</div><div class="v small"><span class="up">${signed(best.pnl,0)}</span> / <span class="down">${signed(worst.pnl,0)}</span></div></div>
     </div>
-    ${expR != null && rs.length < 30 ? `<div class="sub" style="margin-top:8px">⚠ ${rs.length} trades is too few to judge an edge — the Phase 7 gate is 30+ with expectancy above 0R.</div>` : ""}
+    ${stratExp != null ? `<div class="sub" style="margin-top:8px">Strategy exits only (target/stop, ${stratRs.length} trades): <b class="${cls(stratExp)}">${signed(stratExp,2)}R</b> per trade${forced.length ? ` · ${forced.length} forced exit${forced.length>1?"s":""} (end-of-day / manual close) excluded` : ""}</div>` : ""}
+    ${expR != null && rs.length < 30 ? `<div class="sub" style="margin-top:4px">⚠ ${rs.length} trades is too few to judge an edge — the Phase 7 gate is 30+ with expectancy above 0R.</div>` : ""}
     ${groupTable("By setup grade (does a better grade win?)", groupStats(rows, t => t.grade), ["A","B","C","D"])}
     ${groupTable("By trend strength at entry (ADX)", groupStats(rows, t => {
         const a = Number(t.adx || 0); if (!a) return null;
@@ -460,7 +472,9 @@ $("btn-auto").onclick = () => sendCommand("mode:auto",
 $("btn-manual").onclick = () => sendCommand("mode:manual",
   "Back to manual: every trade will need your Approve tap. Confirm?").then(loadExecMode);
 $("btn-endday").onclick = () => sendCommand("endday",
-  "End the session now? Everything is flattened, the bot shuts down, and you can switch off after the Telegram confirmation.");
+  "End the session and leave trades running? The bot stops, but each open trade keeps its stop and target at the broker and ends on one of them. Safe to switch off after the Telegram confirmation.");
+$("btn-endflat").onclick = () => sendCommand("endday:flat",
+  "Close everything and end? Every open trade is exited at market now, then the bot shuts down.");
 async function loadExecMode() {
   const { data } = await sb.from("tb_status").select("mode").eq("id", 1);
   if (data && data.length && data[0].mode) {
