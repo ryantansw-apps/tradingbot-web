@@ -568,6 +568,23 @@ $("pass-save").onclick = () => { localStorage.setItem(passKey, $("pass").value);
 wireCollapse();
 const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); };
 refreshAll(); setInterval(refreshAll, 15000);
+
+// ---- self-update ----------------------------------------------------------
+// This is a static page: after a deploy, phones happily keep serving the
+// cached copy for hours (observed 31 Aug: a feature was live on the server
+// while the tablet showed the previous build). Poll our own ETag and reload
+// once when it changes, so every open dashboard follows deploys on its own.
+let pageTag = null;
+async function checkForNewVersion() {
+  try {
+    const r = await fetch(window.location.href, { method: "HEAD", cache: "no-store" });
+    const tag = r.headers.get("etag") || r.headers.get("last-modified");
+    if (!tag) return;
+    if (pageTag === null) { pageTag = tag; return; }
+    if (tag !== pageTag) window.location.reload();
+  } catch (_) { /* offline is fine; try again later */ }
+}
+checkForNewVersion(); setInterval(checkForNewVersion, 5 * 60 * 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 </script>
 </body>
