@@ -93,6 +93,7 @@
     <div class="sub" id="subline">connecting…</div>
   </div>
   <div class="sub" id="clock"></div>
+  <div class="sub" id="build" title="when this copy of the dashboard was published"></div>
 </header>
 
 <main>
@@ -579,6 +580,12 @@ async function checkForNewVersion() {
   try {
     const r = await fetch(window.location.href, { method: "HEAD", cache: "no-store" });
     const tag = r.headers.get("etag") || r.headers.get("last-modified");
+    // Visible build stamp, so "am I on the old interface?" is answerable at a
+    // glance: this is when the SERVER's copy was published. If the page ever
+    // shows stale content, this line and a fresh deploy time cannot coexist.
+    const lm = r.headers.get("last-modified");
+    if (lm) $("build").textContent = "build " + new Date(lm).toLocaleString([],
+      { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     if (!tag) return;
     if (pageTag === null) { pageTag = tag; return; }
     if (tag !== pageTag) window.location.reload();
