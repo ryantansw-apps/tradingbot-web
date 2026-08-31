@@ -304,7 +304,7 @@ function renderTrades(rows) {
   const total = rows.reduce((a,t)=>a+Number(t.pnl||0),0), wins = rows.filter(t=>Number(t.pnl)>0).length;
   $("trades-sum").innerHTML = `<span class="${cls(total)}">${signed(total)}</span> · ${wins}/${rows.length} wins`;
   $("trades").innerHTML = `<table><tr><th>When</th><th>Sym</th><th>Setup</th><th class="r">Qty</th><th>Exit</th><th class="r">P&amp;L</th></tr>` +
-    rows.slice(0, shown.trades).map(t => `<tr><td class="sub">${new Date(t.closed_at).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})}</td><td><b>${esc(t.symbol)}</b> <span class="sub">${esc(t.side||"")}</span></td><td>${t.grade ? `<span class="pill ${esc(t.grade)}">${esc(t.grade)}${t.confidence ? " · " + Math.round(Number(t.confidence)*100) + "%" : ""}</span>` : `<span class="sub">-</span>`}${t.adx ? `<br><span class="sub">ADX ${fmt(t.adx,0)}</span>` : ""}</td><td class="r">${fmt(t.qty,0)}</td><td class="sub">${esc((t.exit_how||"").split(" (")[0])}</td><td class="r ${cls(t.pnl)}">${signed(t.pnl)}<br><span class="sub">${signed(t.pnl_pct,2,true)}</span></td></tr>`).join("") + `</table>` + moreButton("trades", rows.length);
+    rows.slice(0, shown.trades).map(t => `<tr><td class="sub">${new Date(t.closed_at).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})}</td><td><b>${esc(t.symbol)}</b> <span class="sub">${esc(t.side||"")}</span>${(t.strategy||"") === "rsi2" ? `<br><span class="pill">RSI2 dip</span>` : ""}</td><td>${t.grade ? `<span class="pill ${esc(t.grade)}">${esc(t.grade)}${t.confidence ? " · " + Math.round(Number(t.confidence)*100) + "%" : ""}</span>` : `<span class="sub">-</span>`}${t.adx ? `<br><span class="sub">ADX ${fmt(t.adx,0)}</span>` : ""}</td><td class="r">${fmt(t.qty,0)}</td><td class="sub">${esc((t.exit_how||"").split(" (")[0])}</td><td class="r ${cls(t.pnl)}">${signed(t.pnl)}<br><span class="sub">${signed(t.pnl_pct,2,true)}</span></td></tr>`).join("") + `</table>` + moreButton("trades", rows.length);
 }
 
 // ---- analytics ------------------------------------------------------------
@@ -379,7 +379,7 @@ function renderPerformance(rows) {
   // Strategy exits are the ones the plan chose (target or stop). Forced exits
   // (end-of-day, manual close) say more about the operator's schedule than
   // about the edge, so they are measured separately.
-  const isStrategyExit = t => /take-profit|stop-loss/.test(t.exit_how || "");
+  const isStrategyExit = t => /take-profit|stop-loss|rsi2 ma-exit|rsi2 earnings exit|rsi2_stop/.test(t.exit_how || "");
   const stratRs = rows.filter(isStrategyExit).map(tradeR).filter(r => r != null);
   const forced = rows.filter(t => !isStrategyExit(t));
   const stratExp = stratRs.length ? stratRs.reduce((a, r) => a + r, 0) / stratRs.length : null;
@@ -401,6 +401,8 @@ function renderPerformance(rows) {
     </div>
     ${stratExp != null ? `<div class="sub" style="margin-top:8px">Strategy exits only (target/stop, ${stratRs.length} trades): <b class="${cls(stratExp)}">${signed(stratExp,2)}R</b> per trade${forced.length ? ` · ${forced.length} forced exit${forced.length>1?"s":""} (end-of-day / manual close) excluded` : ""}</div>` : ""}
     ${expR != null && rs.length < 30 ? `<div class="sub" style="margin-top:4px">⚠ ${rs.length} trades is too few to judge an edge — the Phase 7 gate is 30+ with expectancy above 0R.</div>` : ""}
+    ${groupTable("By strategy (breakout = trend-following intraday, RSI2 = multi-day dip buying)",
+        groupStats(rows, t => t.strategy || "breakout"), ["breakout","rsi2"])}
     ${groupTable("By setup grade (does a better grade win?)", groupStats(rows, t => t.grade), ["A","B","C","D"])}
     ${groupTable("By trend strength at entry (ADX)", groupStats(rows, t => {
         const a = Number(t.adx || 0); if (!a) return null;
