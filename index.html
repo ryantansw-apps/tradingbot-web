@@ -441,6 +441,11 @@ function renderWatchlist(rows) {
       <span class="x" title="delete forever" onclick="deleteSym('${esc(r.symbol)}')">✕</span>
     </div>`).join("");
   }
+  // The free IEX feed streams at most 30 symbols. Over that, the bot drops
+  // the newest extras and says so - warn here BEFORE the session starts.
+  if (live.length > 30) {
+    $("wl-chips").innerHTML += `<div class="empty" style="width:100%">⚠ ${live.length} symbols active but the free data feed streams only 30. The bot will skip the ${live.length - 30} newest (${live.slice(30).map(r=>esc(r.symbol)).join(", ")}). Pause one to make room.</div>`;
+  }
   const bad = rows.filter(r => r.status === "invalid" && r.enabled);
   if (bad.length) $("wl-chips").innerHTML += `<div class="empty" style="width:100%">⚠ ${bad.map(r=>esc(r.symbol)).join(", ")}: ${esc(bad[0].status_note || "not a tradable symbol")} — tap ✕ to park it, then ✕ again below to delete</div>`;
 }
