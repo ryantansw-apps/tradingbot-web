@@ -415,19 +415,34 @@ function renderPerformance(rows) {
 
 function renderWatchlist(rows) {
   $("wl-count").textContent = `${rows.filter(r=>r.enabled && r.status !== "invalid").length} active`;
-  $("wl-chips").innerHTML = rows.map(r => {
+  const live = rows.filter(r => r.enabled);
+  const parked = rows.filter(r => !r.enabled);
+  const chip = r => {
     const st = r.status || "pending";
     const badge = st === "active" ? "✓" : st === "invalid" ? "⚠" : "⏳";
     const badgeCls = st === "active" ? "up" : st === "invalid" ? "down" : "warn";
     return `
-    <div class="chip ${r.enabled ? "" : "off"}" data-sym="${esc(r.symbol)}" title="${esc(r.status_note || st)}">
+    <div class="chip" data-sym="${esc(r.symbol)}" title="${esc(r.status_note || st)}">
       <span class="${badgeCls}">${badge}</span>
-      <span onclick="toggleSym('${esc(r.symbol)}', ${r.enabled ? "false" : "true"})">${esc(r.symbol)}</span>
-      <span class="x" title="remove" onclick="removeSym('${esc(r.symbol)}')">✕</span>
+      <span onclick="pauseSym('${esc(r.symbol)}')">${esc(r.symbol)}</span>
+      <span class="x" title="remove" onclick="pauseSym('${esc(r.symbol)}')">✕</span>
     </div>`;
-  }).join("") || `<div class="empty">empty — add a symbol</div>`;
-  const bad = rows.filter(r => r.status === "invalid");
-  if (bad.length) $("wl-chips").innerHTML += `<div class="empty" style="width:100%">⚠ ${bad.map(r=>esc(r.symbol)).join(", ")}: ${esc(bad[0].status_note || "not a tradable symbol")} — tap ✕ to clear</div>`;
+  };
+  $("wl-chips").innerHTML = live.map(chip).join("") || `<div class="empty">empty — add a symbol</div>`;
+  // Everything paused or removed stays HERE, restorable with one tap. Nothing
+  // leaves this list without a "Permanently delete?" confirmation, so an
+  // accidental tap can always be undone.
+  if (parked.length) {
+    $("wl-chips").innerHTML += `
+    <div class="sub" style="width:100%;margin-top:8px">Paused / removed — tap ↩ to restore:</div>` +
+      parked.map(r => `
+    <div class="chip off" data-sym="${esc(r.symbol)}" title="${esc(r.status_note || r.status || "")}">
+      <span title="restore" onclick="restoreSym('${esc(r.symbol)}')">↩ ${esc(r.symbol)}</span>
+      <span class="x" title="delete forever" onclick="deleteSym('${esc(r.symbol)}')">✕</span>
+    </div>`).join("");
+  }
+  const bad = rows.filter(r => r.status === "invalid" && r.enabled);
+  if (bad.length) $("wl-chips").innerHTML += `<div class="empty" style="width:100%">⚠ ${bad.map(r=>esc(r.symbol)).join(", ")}: ${esc(bad[0].status_note || "not a tradable symbol")} — tap ✕ to park it, then ✕ again below to delete</div>`;
 }
 
 async function needPass() {
@@ -443,17 +458,26 @@ async function addSym() {
   if (error) return toast("Add failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   $("wl-input").value = ""; toast(`Added ${sym} — pending verification by the bot`); load();
 }
-async function toggleSym(sym, enabled) {
+async function pauseSym(sym) {
+  // Soft only: the row stays in the Paused/removed list with a ↩ restore.
+  if (!await askConfirm(`Pause ${sym}? The bot stops monitoring it. You can restore it any time from the Paused list.`)) return;
   if (!await needPass()) return;
-  const { error } = await sb.from("tb_watchlist").update({ enabled }).eq("symbol", sym);
-  if (error) return toast("Update failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
-  toast(`${sym} ${enabled ? "enabled" : "paused"}`); load();
+  const { error } = await sb.from("tb_watchlist").update({ enabled: false }).eq("symbol", sym);
+  if (error) return toast("Pause failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  toast(`${sym} paused — tap ↩ in the Paused list to undo`); load();
 }
-async function removeSym(sym) {
-  if (!await askConfirm(`Remove ${sym} from the watchlist?`)) return; if (!await needPass()) return;
+async function restoreSym(sym) {
+  if (!await needPass()) return;
+  const { error } = await sb.from("tb_watchlist").update({ enabled: true, status: "pending", status_note: "restored — awaiting bot verification" }).eq("symbol", sym);
+  if (error) return toast("Restore failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  toast(`${sym} restored`); load();
+}
+async function deleteSym(sym) {
+  if (!await askConfirm(`Permanently delete ${sym}? This cannot be undone.`)) return;
+  if (!await needPass()) return;
   const { error } = await sb.from("tb_watchlist").delete().eq("symbol", sym);
-  if (error) return toast("Remove failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
-  toast(`Removed ${sym}`); load();
+  if (error) return toast("Delete failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  toast(`${sym} deleted`); load();
 }
 const RISK_MODES = ["conservative", "neutral", "aggressive"];
 const RISK_DESC = {
