@@ -84,6 +84,28 @@
     .curve { width: 100%; height: 64px; margin: 10px 0 4px; display: block; }
     .bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; margin-top: 4px; }
     .bar > span { display: block; height: 100%; background: var(--accent); }
+    /* SGX research card: stacked, no sideways scroll at 390 px */
+    .chip.sel { border-color: var(--accent); background: rgba(76,154,255,.14); }
+    .sgx-h { margin-top: 12px; }
+    .sgx-h .nm { font-size: 16px; font-weight: 700; }
+    .sgx-h .px { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 4px; }
+    .sec { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted);
+           margin: 16px 0 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .fac { display: flex; gap: 8px; padding: 5px 0; font-size: 13.5px; line-height: 1.35; }
+    .fac .sg { flex: 0 0 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+               font-size: 12px; font-weight: 800; background: var(--panel2); color: var(--muted); }
+    .fac .sg.p { background: rgba(35,196,122,.18); color: var(--up); }
+    .fac .sg.m { background: rgba(255,92,92,.18); color: var(--down); }
+    table.vt td, table.vt th { padding: 7px 4px; }
+    table.vt td.lab { color: var(--muted); }
+    .warnnote { color: var(--warn); font-size: 11.5px; }
+    .rng { position: relative; height: 8px; border-radius: 4px; background: var(--panel2); margin: 18px 0 22px; }
+    .rng .mk { position: absolute; top: -5px; width: 3px; height: 18px; border-radius: 2px; transform: translateX(-50%); }
+    .rng .mk.px { background: var(--text); } .rng .mk.mn { background: var(--accent); }
+    .rng .lb { position: absolute; top: 14px; font-size: 10.5px; color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
+    .mix { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+    .news a { color: var(--text); text-decoration: none; display: block; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+    .news a .sub { display: block; margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -138,6 +160,19 @@
   <div class="card">
     <h2 data-card="trades">Closed trades <span><span class="sub" id="trades-sum"></span> <span class="chev">▾</span></span></h2>
     <div class="cbody"><div id="trades"></div></div>
+  </div>
+
+  <div class="card">
+    <h2 data-card="sgx">SGX research <span><span class="sub" id="sgx-asof"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody">
+    <div class="row">
+      <input type="text" id="sgx-input" placeholder="Add e.g. OCBC or O39" autocapitalize="characters" autocomplete="off">
+      <button id="sgx-add">Add</button>
+    </div>
+    <div class="chips" id="sgx-chips"></div>
+    <div id="sgx-detail"></div>
+    <div class="sub" style="margin-top:12px">For your own manual SGX trades: the bot never trades these. Data, not advice. Refreshes hourly on SGX trading days.</div>
+    </div>
   </div>
 
   <div class="card">
@@ -568,8 +603,177 @@ $("btn-flatten").onclick = () => sendCommand("flatten", "FLATTEN ALL: close ever
 $("btn-release").onclick = () => sendCommand("release", "Release the kill switch and resume trading?");
 $("pass-save").onclick = () => { localStorage.setItem(passKey, $("pass").value); sb = client(); toast("Passcode saved on this device"); $("pass").value = ""; };
 
+// ---- SGX research (manual trading; read-only data from scripts/sgx_research.py)
+// Common names -> SGX codes. A wrong code is harmless: the refresh job marks
+// it "no data" and the chip says so.
+const SGX_ALIAS = { OCBC: "O39", DBS: "D05", UOB: "U11", SINGTEL: "Z74", SGX: "S68",
+  KEPPEL: "BN4", STENG: "S63", WILMAR: "F34", GENTING: "G13", SATS: "S58", SIA: "C6L",
+  CAPITALAND: "9CI", SEMBCORP: "U96", VENTURE: "V03", CDL: "C09", UOL: "U14", YZJ: "BS6" };
+// code -> familiar name for chips ("Oversea-Chinese" reads worse than "OCBC")
+const SGX_NAME = Object.fromEntries(Object.entries(SGX_ALIAS).map(([n, c]) => [c + ".SI", n]));
+const sgxLabel = (r) => SGX_NAME[r.symbol] || (r.name || r.symbol).split(" ")[0];
+const sgxSelKey = "tb_sgx_sel";
+let sgxSel = (() => { try { return localStorage.getItem(sgxSelKey) || ""; } catch (_) { return ""; } })();
+let sgxCache = { wl: [], res: {}, sig: "" };
+
+function sgxCode(raw) {
+  const s = String(raw || "").trim().toUpperCase().replace(/\.SI$/, "").replace(/\s+/g, "");
+  const code = SGX_ALIAS[s] || s;
+  return /^[A-Z0-9]{2,5}$/.test(code) ? code + ".SI" : null;
+}
+const pct = (x, d = 1) => x == null ? "—" : (Number(x) * 100).toFixed(d) + "%";
+const sgd = (x, d = 2) => x == null ? "—" : "S$" + fmt(x, d);
+const bigS = (x) => x == null ? "—" : x >= 1e9 ? "S$" + (x / 1e9).toFixed(1) + "b" : "S$" + (x / 1e6).toFixed(0) + "m";
+const dayDiff = (iso) => iso ? Math.round((new Date(iso + "T00:00:00") - new Date(new Date().toDateString())) / 864e5) : null;
+
+async function loadSgx() {
+  if (!sgxCache.wl.length && !$("sgx-detail").innerHTML) $("sgx-detail").innerHTML = `<div class="empty">Loading…</div>`;
+  const [wl, res] = await Promise.all([
+    sb.from("tb_sgx_watchlist").select("*").order("added_at"),
+    sb.from("tb_sgx_research").select("symbol,name,updated_at,data"),
+  ]);
+  if (wl.error || res.error) { $("sgx-detail").innerHTML = `<div class="empty">Could not load SGX data.</div>`; return; }
+  const sig = JSON.stringify([wl.data, (res.data || []).map(r => r.updated_at), sgxSel]);
+  if (sig === sgxCache.sig) return;          // nothing changed: keep the scroll position
+  sgxCache = { wl: wl.data || [], res: Object.fromEntries((res.data || []).map(r => [r.symbol, r])), sig };
+  const live = sgxCache.wl.filter(r => r.enabled);
+  if (!sgxSel || !live.some(r => r.symbol === sgxSel)) sgxSel = live[0]?.symbol || "";
+  renderSgx();
+}
+
+function renderSgx() {
+  const live = sgxCache.wl.filter(r => r.enabled), parked = sgxCache.wl.filter(r => !r.enabled);
+  $("sgx-chips").innerHTML = live.map(r => {
+    const bad = r.status === "invalid", wait = !sgxCache.res[r.symbol];
+    return `<div class="chip ${r.symbol === sgxSel ? "sel" : ""}" title="${esc(r.status_note || "")}">
+      <span onclick="selSgx('${esc(r.symbol)}')">${bad ? "⚠ " : wait ? "⏳ " : ""}${esc(sgxLabel(r))} <span class="sub">${esc(r.symbol.replace(".SI", ""))}</span></span>
+      <span class="x" title="remove" onclick="pauseSgx('${esc(r.symbol)}')">✕</span></div>`;
+  }).join("") || `<div class="empty">Add an SGX stock to start.</div>`;
+  if (parked.length) $("sgx-chips").innerHTML += `<div class="sub" style="width:100%;margin-top:6px">Removed, tap ↩ to restore:</div>` +
+    parked.map(r => `<div class="chip off"><span onclick="restoreSgx('${esc(r.symbol)}')">↩ ${esc(r.symbol.replace(".SI", ""))}</span></div>`).join("");
+
+  const row = sgxCache.res[sgxSel];
+  const wlRow = sgxCache.wl.find(r => r.symbol === sgxSel);
+  $("sgx-asof").textContent = row ? "updated " + ago(row.updated_at) : "";
+  if (!sgxSel) { $("sgx-detail").innerHTML = ""; return; }
+  if (wlRow && wlRow.status === "invalid") { $("sgx-detail").innerHTML = `<div class="empty">⚠ ${esc(sgxSel)}: no data for this code. Check the SGX code and re-add it.</div>`; return; }
+  if (!row) { $("sgx-detail").innerHTML = `<div class="empty">Finding data for ${esc(sgxSel)}… it appears after the next hourly refresh on an SGX trading day.</div>`; return; }
+  $("sgx-detail").innerHTML = sgxDetail(row.data);
+}
+
+function sgxDetail(d) {
+  const chg = d.prev_close ? d.price / d.prev_close - 1 : null;
+  const stale = (Date.now() - new Date(d.as_of)) / 36e5 > 30;
+  const fac = (d.factors || []).map(f => `<div class="fac"><span class="sg ${f.sign === "+" ? "p" : f.sign === "-" ? "m" : ""}">${f.sign === "=" ? "•" : f.sign}</span><span>${esc(f.text)}</span></div>`).join("")
+    || `<div class="empty">Nothing stands out right now.</div>`;
+  const p = d.peers || {}, mk = d.market || {};
+  const ttm = d.trailing_ok === false
+    ? `${fmt(d.pe_ttm, 1)} ⚠` : fmt(d.pe_ttm, 1);
+  const vt = `<table class="vt"><tr><th></th><th class="r">${esc(d.symbol.replace(".SI", ""))}</th><th class="r">Peers</th><th class="r">STI</th></tr>
+    <tr><td class="lab">P/E trailing</td><td class="r">${ttm}</td><td class="r">${fmt(p.pe_ttm, 1)}</td><td class="r">${fmt(mk.pe_ttm, 1)}</td></tr>
+    <tr><td class="lab">P/E forward</td><td class="r">${fmt(d.pe_fwd, 1)}</td><td class="r">${fmt(p.pe_fwd, 1)}</td><td class="r">—</td></tr>
+    <tr><td class="lab">Price/book</td><td class="r">${fmt(d.pb, 2)}</td><td class="r">${fmt(p.pb, 2)}</td><td class="r">—</td></tr>
+    <tr><td class="lab">Div. yield</td><td class="r">${d.div_yield == null ? "—" : fmt(d.div_yield, 2) + "%"}</td><td class="r">${p.div_yield == null ? "—" : fmt(p.div_yield, 2) + "%"}</td><td class="r">${mk.div_yield == null ? "—" : fmt(mk.div_yield, 2) + "%"}</td></tr>
+    <tr><td class="lab">Payout</td><td class="r">${pct(d.payout, 0)}</td><td class="r">—</td><td class="r">—</td></tr></table>
+    ${d.trailing_ok === false ? `<div class="warnnote" style="margin-top:6px">⚠ Trailing earnings look distorted (one-off or a data mix-up). Use forward P/E.</div>` : ""}
+    <div class="sub" style="margin-top:6px">Peers: ${(d.peer_list || []).map(x => esc(x.symbol.replace(".SI", ""))).join(", ") || "none on file"}. STI = SPDR STI ETF (ES3), the index itself carries no P/E.</div>`;
+
+  // analysts
+  const up = d.target_mean && d.price ? d.target_mean / d.price - 1 : null;
+  let rng = "";
+  if (d.target_low != null && d.target_high != null && d.target_high > d.target_low) {
+    const lo = Math.min(d.target_low, d.price), hi = Math.max(d.target_high, d.price);
+    const at = v => ((v - lo) / (hi - lo) * 100).toFixed(1) + "%";
+    rng = `<div class="rng"><span class="mk px" style="left:${at(d.price)}"></span><span class="mk mn" style="left:${at(d.target_mean)}"></span>
+      <span class="lb" style="left:0;transform:none">${sgd(d.target_low)}</span><span class="lb" style="left:100%;transform:translateX(-100%)">${sgd(d.target_high)}</span></div>
+      <div class="sub">White = price now · blue = mean target · ends = lowest and highest analyst target</div>`;
+  }
+  const r = d.ratings || {}, tot = ["strongBuy","buy","hold","sell","strongSell"].reduce((a, k) => a + (r[k] || 0), 0);
+  const mix = tot ? `<div class="mix">${[["strongBuy","#23c47a"],["buy","#5fd69d"],["hold","#8a97a6"],["sell","#ff8a8a"],["strongSell","#ff5c5c"]]
+    .map(([k, c]) => `<span style="width:${(r[k] || 0) / tot * 100}%;background:${c}"></span>`).join("")}</div>
+    <div class="sub" style="margin-top:4px">${r.strongBuy || 0} strong buy · ${r.buy || 0} buy · ${r.hold || 0} hold · ${r.sell || 0} sell · ${r.strongSell || 0} strong sell${d.bullish_3m != null ? ` · buy-rated ${pct(d.bullish_now, 0)} (3 months ago ${pct(d.bullish_3m, 0)})` : ""}</div>` : "";
+  const an = `<div class="grid">
+      <div class="stat"><div class="k">Consensus (${d.n_analysts || 0} analysts)</div><div class="v small">${esc((d.rec_key || "—").replace("_", " "))}</div></div>
+      <div class="stat"><div class="k">Mean target</div><div class="v small">${sgd(d.target_mean)} <span class="${cls(up)}">${up == null ? "" : signed(up * 100, 1, true)}</span></div></div>
+    </div>${rng}${mix}`;
+
+  // earnings
+  const E = d.estimates || {}, T = d.eps_trend || {};
+  const erow = (k, lab) => E[k] ? `<tr><td class="lab">${lab}</td><td class="r">${sgd(E[k].avg, 3)}</td><td class="r ${cls(E[k].growth)}">${E[k].growth == null ? "—" : signed(E[k].growth * 100, 1, true)}</td></tr>` : "";
+  const fy = T["0y"] || {};
+  const rev = fy.current && fy["90daysAgo"] ? fy.current / fy["90daysAgo"] - 1 : null;
+  const ne = dayDiff(d.next_earnings), xd = dayDiff(d.ex_div);
+  const sur = (d.surprises || []).slice(0, 6).map(s => `<tr><td class="lab">${esc(s.date)}</td><td class="r">${fmt(s.estimate, 2)}</td><td class="r">${fmt(s.reported, 2)}</td><td class="r ${cls(s.surprise)}">${s.surprise == null ? "—" : signed(s.surprise * 100, 1, true)}</td></tr>`).join("");
+  const earn = `<div class="grid">
+      <div class="stat"><div class="k">Next results</div><div class="v small">${esc(d.next_earnings || "—")}</div>${ne != null && ne >= 0 ? `<div class="sub">in ${ne} days</div>` : ""}</div>
+      <div class="stat"><div class="k">Ex-dividend</div><div class="v small">${esc(d.ex_div || "—")}</div>${xd != null ? `<div class="sub">${xd >= 0 ? "in " + xd + " days" : (-xd) + " days ago"}</div>` : ""}</div>
+    </div>
+    <table class="vt" style="margin-top:8px"><tr><th>EPS estimate</th><th class="r">Consensus</th><th class="r">Growth</th></tr>
+      ${erow("0q", "This quarter")}${erow("+1q", "Next quarter")}${erow("0y", "This year")}${erow("+1y", "Next year")}</table>
+    ${rev != null ? `<div class="sub" style="margin-top:6px">This year's EPS estimate ${sgd(fy.current, 3)} vs ${sgd(fy["90daysAgo"], 3)} 90 days ago: <b class="${cls(rev)}">${signed(rev * 100, 1, true)}</b> (rising estimates tend to lift a stock, falling ones drag it)</div>` : ""}
+    ${sur ? `<table class="vt" style="margin-top:8px"><tr><th>Reported</th><th class="r">Est.</th><th class="r">Actual</th><th class="r">Surprise</th></tr>${sur}</table>` : ""}
+    ${d.surprises_dropped ? `<div class="sub" style="margin-top:4px">${d.surprises_dropped} report(s) hidden: Yahoo compared a half-year figure to a quarterly estimate, which is a data error, not a real beat or miss.</div>` : ""}`;
+
+  // profitability and price
+  const pos = d.hi52 > d.lo52 ? (d.price - d.lo52) / (d.hi52 - d.lo52) : null;
+  const vs = (a) => a ? signed((d.price / a - 1) * 100, 1, true) : "—";
+  const prof = `<div class="mini">
+      <div class="stat"><div class="k">ROE</div><div class="v">${d.roe == null ? (d.trailing_ok === false ? "n/a ⚠" : "—") : pct(d.roe)}</div></div>
+      <div class="stat"><div class="k">Net margin</div><div class="v">${pct(d.margin)}</div></div>
+      <div class="stat"><div class="k">Revenue growth</div><div class="v ${d.trailing_ok === false ? "" : cls(d.rev_growth)}">${d.rev_growth == null ? "—" : signed(d.rev_growth * 100, 1, true) + (d.trailing_ok === false ? " ⚠" : "")}</div></div>
+      <div class="stat"><div class="k">vs 50-day avg</div><div class="v">${vs(d.ma50)}</div></div>
+      <div class="stat"><div class="k">vs 200-day avg</div><div class="v">${vs(d.ma200)}</div></div>
+      <div class="stat"><div class="k">Beta</div><div class="v">${fmt(d.beta, 2)}</div></div>
+    </div>
+    ${pos != null ? `<div class="sub" style="margin-top:8px">52-week range ${sgd(d.lo52)} to ${sgd(d.hi52)}: price is ${Math.round(pos * 100)}% of the way up</div><div class="bar"><span style="width:${(pos * 100).toFixed(0)}%"></span></div>` : ""}`;
+
+  const peersT = (d.peer_list || []).length ? `<table class="vt"><tr><th>Peer</th><th class="r">Fwd P/E</th><th class="r">P/B</th><th class="r">Yield</th></tr>
+    ${d.peer_list.map(x => `<tr><td class="lab">${esc((x.name || x.symbol).split(" ").slice(0, 2).join(" "))}</td><td class="r">${fmt(x.pe_fwd, 1)}</td><td class="r">${fmt(x.pb, 2)}</td><td class="r">${x.div_yield == null ? "—" : fmt(x.div_yield, 2) + "%"}</td></tr>`).join("")}</table>` : "";
+
+  const news = (d.news || []).map(n => `<a href="${esc(n.url || "#")}" target="_blank" rel="noopener noreferrer">${esc(n.title)}<span class="sub">${esc(n.date)}${n.source ? " · " + esc(n.source) : ""}</span></a>`).join("")
+    || `<div class="empty">No recent headlines.</div>`;
+
+  return `<div class="sgx-h"><div class="nm">${esc(d.name)} <span class="sub">${esc(d.symbol)}</span></div>
+      <div class="px">${sgd(d.price)} <span class="${cls(chg)}" style="font-size:14px">${chg == null ? "" : signed(chg * 100, 2, true)}</span></div>
+      <div class="sub">${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${stale ? ` · <span class="warn">data ${ago(d.as_of)}, may be stale</span>` : ""}</div></div>
+    <div class="sec">What's moving it</div>${fac}
+    <div class="sec">Valuation vs peers and market</div>${vt}
+    <div class="sec">Analyst expectations</div>${an}
+    <div class="sec">Earnings</div>${earn}
+    <div class="sec">Profitability and price</div>${prof}
+    ${peersT ? `<div class="sec">Peers</div>${peersT}` : ""}
+    <div class="sec">News</div><div class="news">${news}</div>
+    <div class="sub" style="margin-top:10px">Source: Yahoo Finance, delayed. Prices in SGD.</div>`;
+}
+
+function selSgx(sym) { sgxSel = sym; try { localStorage.setItem(sgxSelKey, sym); } catch (_) {} sgxCache.sig = ""; renderSgx(); }
+async function addSgx() {
+  const sym = sgxCode($("sgx-input").value);
+  if (!sym) return toast("Use an SGX code like O39 or a name like OCBC");
+  if (!await needPass()) return;
+  const { error } = await sb.from("tb_sgx_watchlist").upsert({ symbol: sym, enabled: true, status: "pending", status_note: "waiting for the next hourly refresh" }, { onConflict: "symbol" });
+  if (error) return toast("Add failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  $("sgx-input").value = ""; sgxSel = sym; try { localStorage.setItem(sgxSelKey, sym); } catch (_) {}
+  sgxCache.sig = ""; toast(`Added ${sym}: data appears after the next refresh`); loadSgx();
+}
+async function pauseSgx(sym) {
+  if (!await askConfirm(`Remove ${sym} from SGX research? You can restore it from the removed list.`)) return;
+  if (!await needPass()) return;
+  const { error } = await sb.from("tb_sgx_watchlist").update({ enabled: false }).eq("symbol", sym);
+  if (error) return toast("Remove failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  sgxCache.sig = ""; toast(`${sym} removed, tap ↩ to restore`); loadSgx();
+}
+async function restoreSgx(sym) {
+  if (!await needPass()) return;
+  const { error } = await sb.from("tb_sgx_watchlist").update({ enabled: true }).eq("symbol", sym);
+  if (error) return toast("Restore failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  sgxCache.sig = ""; toast(`${sym} restored`); loadSgx();
+}
+$("sgx-add").onclick = addSgx;
+$("sgx-input").addEventListener("keydown", e => { if (e.key === "Enter") addSgx(); });
+
 wireCollapse();
-const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); };
+const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); };
 refreshAll(); setInterval(refreshAll, 15000);
 
 // ---- self-update ----------------------------------------------------------
