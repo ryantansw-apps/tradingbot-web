@@ -30,6 +30,14 @@
     .tab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
     body[data-tab="sg"] main .card:not([data-tab="sg"]), body[data-tab="sg"] #banners { display: none; }
     body:not([data-tab="sg"]) main .card[data-tab="sg"] { display: none; }
+    .cmp-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+    .cmp-row:last-child { border-bottom: 0; }
+    .cmp-row .nm { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cmp-row .val { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 64px; text-align: right; }
+    .dots { display: flex; gap: 4px; flex: none; }
+    .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: block; }
+    .dots i.y { background: var(--up); } .dots i.n { background: var(--down); }
+    .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin-top: 10px; }
     header h1 { font-size: 16px; font-weight: 700; letter-spacing: .3px; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
     .dot.live { background: var(--up); box-shadow: 0 0 0 3px rgba(35,196,122,.2); }
@@ -169,6 +177,19 @@
   <div class="card">
     <h2 data-card="trades">Closed trades <span><span class="sub" id="trades-sum"></span> <span class="chev">▾</span></span></h2>
     <div class="cbody"><div id="trades"></div></div>
+  </div>
+
+  <div class="card" data-tab="sg">
+    <h2 data-card="sgxcmp">Compare SGX stocks <span><span class="sub" id="cmp-n"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody">
+    <div class="sub">Rank by:</div>
+    <div class="chips" id="cmp-metrics"></div>
+    <div class="sub" id="cmp-note" style="margin-top:10px"></div>
+    <div id="cmp-list" style="margin-top:4px"><div class="empty">Loading…</div></div>
+    <div class="sub" style="margin-top:10px">The 4 dots, left to right:</div>
+    <div class="legend sub"><span>1. Sales growing</span><span>2. Profit estimates holding</span><span>3. Forward P/E not far above peers</span><span>4. Above 200-day average</span></div>
+    <div class="sub" style="margin-top:8px"><span class="up">●</span> yes &nbsp; <span class="down">●</span> no &nbsp; <span style="color:var(--line)">●</span> no data. Tap a stock for its full breakdown. Measurements, not advice.</div>
+    </div>
   </div>
 
   <div class="card" data-tab="sg">
@@ -652,7 +673,7 @@ async function loadSgx() {
   sgxCache = { wl: wl.data || [], res: Object.fromEntries((res.data || []).map(r => [r.symbol, r])), sig };
   const live = sgxCache.wl.filter(r => r.enabled);
   if (!sgxSel || !live.some(r => r.symbol === sgxSel)) sgxSel = live[0]?.symbol || "";
-  renderSgx();
+  renderSgx(); renderCmp();
 }
 
 function renderSgx() {
@@ -739,6 +760,9 @@ function sgxDetail(d) {
       <div class="stat"><div class="k">vs 50-day avg</div><div class="v">${vs(d.ma50)}</div></div>
       <div class="stat"><div class="k">vs 200-day avg</div><div class="v">${vs(d.ma200)}</div></div>
       <div class="stat"><div class="k">Beta</div><div class="v">${fmt(d.beta, 2)}</div></div>
+      <div class="stat"><div class="k">Debt / equity</div><div class="v">${d.debt_to_equity == null ? "—" : fmt(d.debt_to_equity, 2) + "x"}</div></div>
+      <div class="stat"><div class="k">${d.net_cash != null && d.net_cash < 0 ? "Net debt" : "Net cash"}</div><div class="v ${cls(d.net_cash)}">${d.net_cash == null ? "—" : bigS(Math.abs(d.net_cash))}</div></div>
+      <div class="stat"><div class="k">Traded per day</div><div class="v">${bigS(d.avg_turnover)}</div></div>
     </div>
     ${pos != null ? `<div class="sub" style="margin-top:8px">52-week range ${sgd(d.lo52)} to ${sgd(d.hi52)}: price is ${Math.round(pos * 100)}% of the way up</div><div class="bar"><span style="width:${(pos * 100).toFixed(0)}%"></span></div>` : ""}`;
 
@@ -786,6 +810,42 @@ async function restoreSgx(sym) {
 }
 $("sgx-add").onclick = addSgx;
 $("sgx-input").addEventListener("keydown", e => { if (e.key === "Enter") addSgx(); });
+
+// ---- SGX comparison: every watched stock ranked on one measure at a time.
+// A phone cannot show 21 stocks x 10 columns without sideways scrolling, so the
+// operator picks the column and the list re-sorts.
+const upsideOf = (d) => d.target_mean && d.price ? d.target_mean / d.price - 1 : null;
+const CMP = [
+  { k: "checks", lab: "Checks passed", note: "Most of the 4 checks passed first.", get: d => (d.checks || []).filter(c => c.ok === true).length, show: (v, d) => v + "/" + (d.checks || []).filter(c => c.ok != null).length },
+  { k: "pe", lab: "Forward P/E", note: "Lowest first. Price against next year's expected profit: lower is cheaper.", asc: true, get: d => d.pe_fwd > 0 ? d.pe_fwd : null, show: v => fmt(v, 1) },
+  { k: "growth", lab: "Sales growth", note: "Fastest-growing sales first (latest quarter vs a year ago).", get: d => d.trailing_ok === false ? null : d.rev_growth, show: v => signed(v * 100, 0, true) },
+  { k: "est", lab: "Estimate change", note: "How analysts moved this year's profit estimate over 90 days. Raised first.", get: d => d.eps_rev_90d, show: v => signed(v * 100, 1, true) },
+  { k: "target", lab: "Target gap", note: "How far the price sits below the average analyst target. Very large gaps often mean stale targets.", get: upsideOf, show: v => signed(v * 100, 0, true) },
+  { k: "div", lab: "Dividend", note: "Highest dividend yield first.", get: d => d.div_yield, show: v => fmt(v, 1) + "%" },
+  { k: "roe", lab: "ROE", note: "Profit earned on shareholders' money. Above 10% is decent, above 15% is strong.", get: d => d.roe, show: v => pct(v, 0) },
+  { k: "debt", lab: "Debt", note: "Lowest debt against equity first. REITs normally carry more debt. Banks are left blank: their debt is customer deposits.", asc: true, get: d => d.debt_to_equity, show: v => fmt(v, 2) + "x" },
+  { k: "trend", lab: "vs 200-day", note: "Price against its 200-day average. Above zero is an uptrend.", get: d => d.ma200 && d.price ? d.price / d.ma200 - 1 : null, show: v => signed(v * 100, 0, true) },
+  { k: "liq", lab: "Traded per day", note: "Average value traded daily. Low numbers mean it can be hard to sell at a fair price.", get: d => d.avg_turnover, show: (v, d) => (d.currency === "USD" ? "US$" : "S$") + (v >= 1e6 ? (v / 1e6).toFixed(1) + "m" : (v / 1e3).toFixed(0) + "k") },
+];
+const cmpKey = "tb_sgx_cmp";
+let cmpSel = (() => { try { return localStorage.getItem(cmpKey) || "checks"; } catch (_) { return "checks"; } })();
+function setCmp(k) { cmpSel = k; try { localStorage.setItem(cmpKey, k); } catch (_) {} renderCmp(); }
+function openSgx(sym) { selSgx(sym); $("sgx-detail").scrollIntoView({ behavior: "smooth", block: "start" }); }
+function renderCmp() {
+  const m = CMP.find(x => x.k === cmpSel) || CMP[0];
+  $("cmp-metrics").innerHTML = CMP.map(x => `<div class="chip ${x.k === m.k ? "sel" : ""}" style="padding:6px 12px" onclick="setCmp('${x.k}')">${x.lab}</div>`).join("");
+  $("cmp-note").textContent = m.note;
+  const rows = sgxCache.wl.filter(r => r.enabled && sgxCache.res[r.symbol]).map(r => {
+    const d = sgxCache.res[r.symbol].data; return { r, d, v: m.get(d) };
+  });
+  rows.sort((a, b) => (a.v == null) - (b.v == null) || (m.asc ? a.v - b.v : b.v - a.v));
+  $("cmp-n").textContent = rows.length ? rows.length + " stocks" : "";
+  $("cmp-list").innerHTML = rows.map(({ r, d, v }) => `<div class="cmp-row" onclick="openSgx('${esc(r.symbol)}')">
+      <div class="nm">${esc(sgxLabel(r))} <span class="sub">${esc(r.symbol.replace(".SI", ""))}</span></div>
+      <div class="dots">${(d.checks || [{}, {}, {}, {}]).map(c => `<i class="${c.ok === true ? "y" : c.ok === false ? "n" : ""}" title="${esc(c.label || "")}"></i>`).join("")}</div>
+      <div class="val">${v == null ? "—" : m.show(v, d)}</div></div>`).join("")
+    || `<div class="empty">No data yet. It appears after the next refresh.</div>`;
+}
 
 // ---- US / SG tabs: the bot (US, automated) and SGX research (manual) are
 // separate jobs, so each gets its own screen. Choice is remembered per device.
