@@ -15,6 +15,7 @@
   <link rel="apple-touch-icon" href="icon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.47.10/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 
   <style>
     :root {
@@ -43,11 +44,15 @@
     .seg2 button.on-buy { background: var(--up); color: #000; }
     .seg2 button.on-sell { background: var(--down); color: #000; }
     .ord-f { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
-    .ord-f label { display: block; font-size: 12px; color: var(--mut, #8a97a6); margin-bottom: 3px; }
+    .ord-f label { display: block; font-size: 12px; color: var(--muted, #8a97a6); margin-bottom: 3px; }
     .ord-f input { width: 100%; box-sizing: border-box; }
     .ord-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
     .ord-row:last-child { border-bottom: 0; }
     .demo-tag { display: inline-block; background: #3a2f00; color: #ffd84d; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
+    .chartbox { width: 100%; height: 260px; margin-top: 8px; position: relative; }
+    .chartbox .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .chart-leg { font-size: 12px; margin-top: 4px; }
+    .chart-leg i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin: 0 4px 0 8px; }
     header h1 { font-size: 16px; font-weight: 700; letter-spacing: .3px; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
     .dot.live { background: var(--up); box-shadow: 0 0 0 3px rgba(35,196,122,.2); }
@@ -171,6 +176,16 @@
     </div>
     <div class="chips" id="wl-chips"></div>
     <div class="sub" style="margin-top:8px">The bot picks up changes within ~2 minutes during a session, or at the next start.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 data-card="uschart">Chart <span><span class="sub" id="usc-sym"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody">
+    <div class="chips" id="usc-chips"></div>
+    <div class="chartbox" id="usc-chart"><div class="empty">Loading…</div></div>
+    <div class="chips" id="usc-chart-rng" style="margin-top:6px"></div>
+    <div class="sub chart-leg" id="usc-chart-leg"></div>
     </div>
   </div>
 
@@ -725,6 +740,7 @@ function renderSgx() {
   if (wlRow && wlRow.status === "invalid") { $("sgx-detail").innerHTML = `<div class="empty">⚠ ${esc(sgxSel)}: no data for this code. Check the SGX code and re-add it.</div>`; return; }
   if (!row) { $("sgx-detail").innerHTML = `<div class="empty">Finding data for ${esc(sgxSel)}… it appears after the next hourly refresh on an SGX trading day.</div>`; return; }
   $("sgx-detail").innerHTML = sgxDetail(row.data);
+  drawChart("sgx-chart", sgxSel);
 }
 
 function sgxDetail(d) {
@@ -806,6 +822,9 @@ function sgxDetail(d) {
   return `<div class="sgx-h"><div class="nm">${esc(d.name)} <span class="sub">${esc(d.symbol)}</span></div>
       <div class="px">${sgd(d.price)} <span class="${cls(chg)}" style="font-size:14px">${chg == null ? "" : signed(chg * 100, 2, true)}</span></div>
       <div class="sub">${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${stale ? ` · <span class="warn">data ${ago(d.as_of)}, may be stale</span>` : ""}</div></div>
+    <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
+    <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
+    <div class="sub chart-leg" id="sgx-chart-leg"></div>
     <div class="sec">What's moving it</div>${fac}
     <div class="sec">Valuation vs peers and market</div>${vt}
     <div class="sec">Analyst expectations</div>${an}
@@ -944,6 +963,98 @@ $("ord-qty").oninput = ordEst; $("ord-px").oninput = ordEst;
 $("ord-review").onclick = ordReview;
 ordSetSide("BUY");
 
+// ---- Candlestick charts (TradingView lightweight-charts, Apache-2.0).
+// Daily bars come from tb_chart_bars (scripts/chart_bars.py, refreshed with
+// the hourly SGX job). Moving averages are computed here from the closes.
+const barCache = {};          // symbol -> { at, bars }
+const charts = {};            // element id -> chart instance
+const RANGES = [["3M", 63], ["6M", 126], ["1Y", 252], ["2Y", 520]];
+const rngKey = "tb_chart_rng";
+let chartRng = (() => { try { return localStorage.getItem(rngKey) || "6M"; } catch (_) { return "6M"; } })();
+async function getBars(sym) {
+  const c = barCache[sym];
+  if (c && Date.now() - c.at < 10 * 60 * 1000) return c.bars;
+  const { data, error } = await sb.from("tb_chart_bars").select("bars,updated_at").eq("symbol", sym).maybeSingle();
+  if (error) throw error;
+  const bars = data ? data.bars : [];
+  barCache[sym] = { at: Date.now(), bars };
+  return bars;
+}
+function sma(bars, n) {
+  const out = []; let sum = 0;
+  bars.forEach((b, i) => { sum += b[4]; if (i >= n) sum -= bars[i - n][4]; if (i >= n - 1) out.push({ time: b[0], value: sum / n }); });
+  return out;
+}
+const cssVar = (n, d) => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d;
+async function drawChart(id, sym) {
+  const el = $(id); if (!el || !sym) return;
+  if (typeof LightweightCharts === "undefined") { el.innerHTML = `<div class="empty">Chart library did not load.</div>`; return; }
+  let bars;
+  try { bars = await getBars(sym); } catch (_) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; return; }
+  if ($(id) !== el) return;   // card re-rendered while loading
+  if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; return; }
+  const n = (RANGES.find(r => r[0] === chartRng) || RANGES[1])[1];
+  if (charts[id]) { try { charts[id].remove(); } catch (_) {} }
+  el.innerHTML = "";
+  const up = cssVar("--up", "#23c47a"), dn = cssVar("--down", "#ff5c5c"), txt = cssVar("--muted", "#8a97a6"), line = cssVar("--line", "#2a3140");
+  const ch = LightweightCharts.createChart(el, {
+    width: el.clientWidth || 340, height: el.clientHeight || 260,
+    layout: { background: { color: "transparent" }, textColor: txt, fontSize: 11 },
+    grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
+    rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false },
+    crosshair: { mode: 0 }, handleScroll: false, handleScale: false,
+  });
+  charts[id] = ch; if (chartRO) chartRO.observe(el);
+  const c = ch.addCandlestickSeries({ upColor: up, downColor: dn, wickUpColor: up, wickDownColor: dn, borderVisible: false });
+  c.setData(bars.map(b => ({ time: b[0], open: b[1], high: b[2], low: b[3], close: b[4] })));
+  const vol = ch.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+  ch.priceScale("").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+  vol.setData(bars.map(b => ({ time: b[0], value: b[5], color: b[4] >= b[1] ? up + "55" : dn + "55" })));
+  const m50 = ch.addLineSeries({ color: "#4da3ff", lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+  m50.setData(sma(bars, 50));
+  const m200 = ch.addLineSeries({ color: "#ffb84d", lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+  m200.setData(sma(bars, 200));
+  ch.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - n), to: bars.length - 1 });
+  const rngEl = $(id + "-rng");
+  if (rngEl) rngEl.innerHTML = RANGES.map(([k]) => `<div class="chip ${k === chartRng ? "sel" : ""}" style="padding:4px 12px" onclick="setChartRng('${k}')">${k}</div>`).join("");
+  const last = bars[bars.length - 1], first = bars[Math.max(0, bars.length - n)];
+  const legEl = $(id + "-leg");
+  if (legEl) legEl.innerHTML = `${esc(sym)} · close ${fmt(last[4], 2)} on ${esc(last[0])} · ${chartRng} change <b class="${cls(last[4] - first[4])}">${signed((last[4] / first[4] - 1) * 100, 1, true)}</b>` +
+    `<br><i style="background:#4da3ff"></i>50-day avg<i style="background:#ffb84d"></i>200-day avg · bars at the bottom = volume`;
+}
+function setChartRng(k) {
+  chartRng = k; try { localStorage.setItem(rngKey, k); } catch (_) {}
+  if (sgxSel) drawChart("sgx-chart", sgxSel);
+  if (usChartSym) drawChart("usc-chart", usChartSym);
+}
+const usKey = "tb_us_chart";
+let usChartSym = (() => { try { return localStorage.getItem(usKey) || ""; } catch (_) { return ""; } })();
+let usChartList = "";
+async function loadUsChart() {
+  const [wl, pos] = await Promise.all([
+    sb.from("tb_watchlist").select("symbol,enabled").eq("enabled", true).order("added_at"),
+    sb.from("tb_positions").select("symbol"),
+  ]);
+  const held = (pos.data || []).map(r => r.symbol);
+  const syms = [...new Set([...held, ...(wl.data || []).map(r => r.symbol)])];
+  if (!syms.length) { $("usc-chart").innerHTML = `<div class="empty">Add a symbol to the watchlist to chart it.</div>`; return; }
+  if (!usChartSym || !syms.includes(usChartSym)) usChartSym = syms[0];
+  const sig = JSON.stringify([syms, held, usChartSym]);
+  if (sig === usChartList) return;   // unchanged: keep the chart as it is
+  usChartList = sig;
+  $("usc-chips").innerHTML = syms.map(s => `<div class="chip ${s === usChartSym ? "sel" : ""}" onclick="selUsChart('${esc(s)}')">${held.includes(s) ? "● " : ""}${esc(s)}</div>`).join("");
+  $("usc-sym").textContent = usChartSym;
+  drawChart("usc-chart", usChartSym);
+}
+function selUsChart(s) { usChartSym = s; try { localStorage.setItem(usKey, s); } catch (_) {} usChartList = ""; loadUsChart(); }
+// Charts drawn while their tab or card is hidden start at width 0: resize them
+// whenever their box changes size (tab switch, card expand, rotation).
+const chartRO = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(entries => {
+  for (const e of entries) { const ch = charts[e.target.id]; const w = Math.floor(e.contentRect.width);
+    if (ch && w > 0) { ch.applyOptions({ width: w, height: Math.floor(e.contentRect.height) || 260 }); } }
+});
+window.addEventListener("resize", () => { for (const [id, ch] of Object.entries(charts)) { const el = $(id); if (el && el.clientWidth) ch.applyOptions({ width: el.clientWidth }); } });
+
 // ---- US / SG tabs: the bot (US, automated) and SGX research (manual) are
 // separate jobs, so each gets its own screen. Choice is remembered per device.
 const tabKey = "tb_tab";
@@ -957,7 +1068,7 @@ document.querySelectorAll("[data-tabbtn]").forEach(b => b.onclick = () => setTab
 setTab((() => { try { return localStorage.getItem(tabKey); } catch (_) { return null; } })() === "sg" ? "sg" : "us");
 
 wireCollapse();
-const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); };
+const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); };
 refreshAll(); setInterval(refreshAll, 15000);
 
 // ---- self-update ----------------------------------------------------------
