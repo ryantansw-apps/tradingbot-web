@@ -297,6 +297,11 @@
       <div><label for="bk-amt" id="bk-amt-lab">Amount to invest</label><input type="number" id="bk-amt" min="0" step="10" inputmode="decimal" value="1000"></div>
       <div><label for="bk-add">Add a stock</label><select id="bk-add"></select></div>
     </div>
+    <div class="ord-f">
+      <div><label for="bk-n">Stocks in an idea</label><select id="bk-n"><option>3</option><option>4</option><option selected>5</option><option>6</option><option>8</option></select></div>
+      <div><label>&nbsp;</label><button id="bk-gen" style="width:100%">Generate idea</button></div>
+    </div>
+    <div class="sub" id="bk-gen-note" style="margin-top:6px"></div>
     <div id="bk-rows" style="margin-top:8px"></div>
     <div class="bk-btns"><button class="ghost" id="bk-even">Split evenly</button><button class="ghost" id="bk-save">Save basket</button></div>
     <div id="bk-sum" style="margin-top:10px"></div>
@@ -1189,7 +1194,42 @@ ordSetSide("BUY"); ordSetKind("stock");
 // ---- Baskets: a saved list of research stocks + weights (%). Buying one
 // queues one ordinary tb_tiger_orders row per stock, so the worker checks
 // each order exactly as if it were placed by hand.
-let bkList = [], bkCur = { id: null, name: "", items: [] };
+let bkList = [], bkCur = { id: null, name: "", items: [] }, bkUni = {}, bkIdeaNo = 0;
+// price/name/sector for a basket stock: research list first, else the most-traded list
+function bkData(sym) {
+  const d = sgxCache.res[sym]?.data;
+  if (d && d.price) return d;
+  const u = bkUni[sym];
+  return u ? { name: u.name, price: Number(u.price), sector: u.sector, currency: u.currency } : null;
+}
+const bkBig = (v) => v >= 1e9 ? fmt(v / 1e9, 1) + "b" : fmt(v / 1e6, 0) + "m";
+function bkGenerate() {
+  const n = parseInt($("bk-n").value, 10), amt = parseFloat($("bk-amt").value) || 0, cur = bkCcy();
+  const ranked = Object.values(bkUni).filter(u => u.market === mkt && u.currency === cur && u.price > 0 && u.avg_value > 0)
+    .sort((a, b) => b.avg_value - a.avg_value);
+  if (!ranked.length) return toast("Most-traded list not loaded yet. Try again in a moment.");
+  const top = ranked.slice(0, 30);
+  // 1 share must fit in an equal slot of the amount
+  const fits = top.filter(u => !(amt > 0) || bkLimit(Number(u.price)) <= amt / n);
+  const pool = fits.slice();
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  const per = {}, picked = [];
+  for (const u of pool) {
+    const k = u.sector || "Other";
+    if ((per[k] || 0) >= 2) continue;
+    per[k] = (per[k] || 0) + 1; picked.push(u);
+    if (picked.length === n) break;
+  }
+  if (!picked.length) return toast(`No most-traded stock fits ${bkMoney()}${fmt(amt / n, 0)} per stock. Raise the amount or pick fewer stocks.`);
+  picked.sort((a, b) => b.avg_value - a.avg_value);
+  bkIdeaNo++;
+  bkCur = { id: null, name: `Idea ${bkIdeaNo}: most traded`, items: picked.map(u => ({ symbol: u.symbol, weight: 0 })) };
+  $("bk-name").value = bkCur.name;
+  $("bk-gen-note").innerHTML = `Picked at random from the 30 most traded ${mkt === "US" ? "US" : "SGX"} stocks (money traded per day, last 20 days), at most 2 per industry` +
+    (amt > 0 ? `, only stocks where 1 share fits ${bkMoney()}${fmt(amt / n, 0)}` : "") + `. Press Generate again for another mix. An idea from a rule, not advice.` +
+    (picked.length < n ? ` <span class="warn">Only ${picked.length} fit: raise the amount or pick fewer stocks.</span>` : "");
+  bkEven();
+}
 const bkMoney = () => mkt === "US" ? "US$" : "S$";
 const bkCcy = () => mkt === "US" ? "USD" : "SGD";
 function bkTick(p) { return mkt === "US" ? 0.01 : p < 0.2 ? 0.001 : p < 1 ? 0.005 : 0.01; }
@@ -1198,14 +1238,15 @@ function bkStocks() {
   return sgxCache.wl.filter(r => r.enabled && inMkt(r) && sgxCache.res[r.symbol]?.data?.price && sgxCache.res[r.symbol].data.currency === bkCcy());
 }
 async function bkLoad() {
-  const { data, error } = await sb.from("tb_baskets").select("*").order("name");
-  if (!error) bkList = data || [];
+  const [b, u] = await Promise.all([sb.from("tb_baskets").select("*").order("name"), sb.from("tb_universe").select("*")]);
+  if (!b.error) bkList = b.data || [];
+  if (!u.error) { bkUni = {}; (u.data || []).forEach(r => { r.price = Number(r.price); r.avg_value = Number(r.avg_value); bkUni[r.symbol] = r; }); }
   bkRender();
 }
 function bkPlan() {
   const amt = parseFloat($("bk-amt").value) || 0;
   return bkCur.items.map(it => {
-    const d = sgxCache.res[it.symbol]?.data, w = Number(it.weight) || 0;
+    const d = bkData(it.symbol), w = Number(it.weight) || 0;
     if (!d || !d.price) return { ...it, d: null, w, q: 0, px: 0, v: 0 };
     const px = bkLimit(d.price), q = Math.floor(amt * w / 100 / px);
     return { ...it, d, w, px, q, v: q * px };
@@ -1223,7 +1264,7 @@ function bkRender() {
   const plan = bkPlan();
   $("bk-rows").innerHTML = plan.map((r, i) => `<div class="bk-row">
       <div><b>${esc(r.d ? r.d.name : r.symbol)}</b> <span class="sub">${esc(shortSym(r.symbol))}</span>
-        <div class="sub bk-info">${r.d ? `${r.q} shares × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(r.d.sector || "")}` : "No price yet"}</div></div>
+        <div class="sub bk-info">${r.d ? `${r.q} shares × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(r.d.sector || "")}` : "No price yet"}</div>${bkUni[r.symbol] ? `<div class="sub">Trades about ${bkMoney()}${bkBig(bkUni[r.symbol].avg_value)} a day</div>` : ""}</div>
       <input type="number" min="0" max="100" step="1" inputmode="numeric" value="${r.w}" data-bkw="${i}" aria-label="Weight % for ${esc(r.symbol)}">
       <span class="x" data-bkx="${i}" aria-label="Remove">✕</span></div>`).join("")
     || `<div class="empty">No stocks yet. Use "Add a stock" above.</div>`;
@@ -1265,7 +1306,7 @@ function bkSum() {
 function bkPick() {
   const id = parseInt($("bk-sel").value, 10), b = bkList.find(x => x.id === id);
   bkCur = b ? { id: b.id, name: b.name, items: (b.items || []).map(x => ({ ...x })) } : { id: null, name: "", items: [] };
-  $("bk-name").value = bkCur.name; bkRender();
+  $("bk-name").value = bkCur.name; $("bk-gen-note").textContent = ""; bkRender();
 }
 function bkAdd() {
   const sym = $("bk-add").value; if (!sym) return;
@@ -1310,7 +1351,7 @@ async function bkBuy() {
   if (error) return toast("Not queued: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   toast(`${rows.length} orders queued: the laptop sends them within about 10 s`); loadOrders();
 }
-$("bk-sel").onchange = bkPick; $("bk-add").onchange = bkAdd; $("bk-even").onclick = bkEven;
+$("bk-sel").onchange = bkPick; $("bk-gen").onclick = bkGenerate; $("bk-add").onchange = bkAdd; $("bk-even").onclick = bkEven;
 $("bk-save").onclick = bkSave; $("bk-del").onclick = bkDelete; $("bk-buy").onclick = bkBuy;
 $("bk-amt").oninput = () => { bkSum(); bkRowText(); };
 bkLoad();
