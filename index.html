@@ -234,7 +234,7 @@
     </div>
     <div class="chips" id="sgx-chips"></div>
     <div id="sgx-detail"></div>
-    <div class="sub" style="margin-top:12px">For your own manual trades through Tiger: the Alpaca bot never trades these. Data, not advice. Refreshes hourly on weekdays, 9:30am to 5:30pm SG time, so US prices show the last US close.</div>
+    <div class="sub" style="margin-top:12px">For your own manual trades through Tiger: the Alpaca bot never trades these. Data, not advice. Refreshes hourly on weekdays, 9:30am to 5:30pm and 9:30pm to 4:30am SG time (US market hours).</div>
     </div>
   </div>
 
@@ -761,7 +761,7 @@ function renderSgx() {
   $("sgx-asof").textContent = row ? "updated " + ago(row.updated_at) : "";
   if (!sgxSel) { $("sgx-detail").innerHTML = ""; return; }
   if (wlRow && wlRow.status === "invalid") { $("sgx-detail").innerHTML = `<div class="empty">⚠ ${esc(sgxSel)}: no data for this code. Check the ${sgxSel.endsWith(".SI") ? "SGX code" : "ticker"} and re-add it.</div>`; return; }
-  if (!row) { $("sgx-detail").innerHTML = `<div class="empty">Finding data for ${esc(sgxSel)}… it appears after the next hourly refresh (weekdays, 9:30am to 5:30pm SG time).</div>`; return; }
+  if (!row) { $("sgx-detail").innerHTML = `<div class="empty">Finding data for ${esc(sgxSel)}… it appears after the next hourly refresh (weekdays, 9:30am to 5:30pm and 9:30pm to 4:30am SG time).</div>`; return; }
   $("sgx-detail").innerHTML = sgxDetail(row.data);
   drawChart("sgx-chart", sgxSel);
 }
