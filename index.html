@@ -53,6 +53,11 @@
     .ord-f select { width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 10px 8px; font-size: 15px; }
     .seg2 button.on-kind { background: var(--accent); color: #041022; }
     .cc-sum .ord-row b { white-space: nowrap; }
+    .bk-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px 24px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .bk-row input { width: 100%; box-sizing: border-box; text-align: right; }
+    .bk-row .x { width: 24px; height: 24px; border-radius: 50%; background: var(--line); display: grid; place-items: center; font-size: 12px; cursor: pointer; }
+    .bk-btns { display: flex; gap: 8px; margin-top: 10px; }
+    .bk-btns button { flex: 1; }
     .ord-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
     .ord-row:last-child { border-bottom: 0; }
     .demo-tag { display: inline-block; background: #3a2f00; color: #ffd84d; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
@@ -274,6 +279,27 @@
     <div class="sub" style="margin-top:8px" id="ord-rules">Limit order, good for today only. It fills only at your price or better. Orders more than 10% from the last price are refused.</div>
     <div class="sec" style="margin-top:12px">Recent orders</div>
     <div id="ord-list"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="card" data-tab="sg">
+    <h2 data-card="basket">Baskets (your mini fund) <span><span class="demo-tag">PRACTICE</span> <span class="chev">▾</span></span></h2>
+    <div class="cbody">
+    <div class="sub">Pick stocks from your Research list and how much of your money goes into each. One tap queues an order for every stock. You choose the stocks; this is a tool, not advice.</div>
+    <div class="ord-f">
+      <div><label for="bk-sel">Basket</label><select id="bk-sel"></select></div>
+      <div><label for="bk-name">Name</label><input type="text" id="bk-name" maxlength="40" placeholder="SG banks and REITs" style="text-transform:none"></div>
+    </div>
+    <div class="ord-f">
+      <div><label for="bk-amt" id="bk-amt-lab">Amount to invest</label><input type="number" id="bk-amt" min="0" step="10" inputmode="decimal" value="1000"></div>
+      <div><label for="bk-add">Add a stock</label><select id="bk-add"></select></div>
+    </div>
+    <div id="bk-rows" style="margin-top:8px"></div>
+    <div class="bk-btns"><button class="ghost" id="bk-even">Split evenly</button><button class="ghost" id="bk-save">Save basket</button></div>
+    <div id="bk-sum" style="margin-top:10px"></div>
+    <button id="bk-buy" style="width:100%;margin-top:10px">Buy basket</button>
+    <button class="ghost" id="bk-del" style="width:100%;margin-top:8px">Delete this basket</button>
+    <div class="sub" style="margin-top:8px">Each stock becomes its own limit order, good for today, priced a touch above the last price so it is more likely to fill. Shares are whole numbers, so a little cash is left over. Each order pays its own minimum fee, so very small amounts lose more to fees.</div>
     </div>
   </div>
 
@@ -951,6 +977,7 @@ function ordStock() {
   if (d && ordFor !== sgxSel) { ordFor = sgxSel; $("ord-px").value = Number(d.price).toFixed(d.price < 1 ? 3 : 2); ccFill(); }
   // covered calls: US stocks only (SGX has no listed options)
   $("ord-kind").style.display = d && ordUs() ? "" : "none";
+  if (typeof bkRender === "function" && $("bk-rows")) { if (bkCur.items.some(i => i.symbol.endsWith(".SI") !== (mkt === "SG"))) { bkCur = { id: null, name: "", items: [] }; $("bk-name").value = ""; } bkRender(); }
   if (!(d && ordUs()) && ordKind === "cc") ordSetKind("stock"); else ordEst();
 }
 
@@ -1099,6 +1126,135 @@ $("kind-cc").onclick = () => ordSetKind("cc");
 $("cc-exp").onchange = ccStrikes; $("cc-strike").onchange = ccPrem; $("cc-px").oninput = ordEst;
 $("ord-review").onclick = ordReview;
 ordSetSide("BUY"); ordSetKind("stock");
+
+// ---- Baskets: a saved list of research stocks + weights (%). Buying one
+// queues one ordinary tb_tiger_orders row per stock, so the worker checks
+// each order exactly as if it were placed by hand.
+let bkList = [], bkCur = { id: null, name: "", items: [] };
+const bkMoney = () => mkt === "US" ? "US$" : "S$";
+const bkCcy = () => mkt === "US" ? "USD" : "SGD";
+function bkTick(p) { return mkt === "US" ? 0.01 : p < 0.2 ? 0.001 : p < 1 ? 0.005 : 0.01; }
+function bkLimit(p) { const t = bkTick(p); return Math.round(Math.ceil(p * 1.005 / t - 1e-9) * t * 1000) / 1000; }
+function bkStocks() {
+  return sgxCache.wl.filter(r => r.enabled && inMkt(r) && sgxCache.res[r.symbol]?.data?.price && sgxCache.res[r.symbol].data.currency === bkCcy());
+}
+async function bkLoad() {
+  const { data, error } = await sb.from("tb_baskets").select("*").order("name");
+  if (!error) bkList = data || [];
+  bkRender();
+}
+function bkPlan() {
+  const amt = parseFloat($("bk-amt").value) || 0;
+  return bkCur.items.map(it => {
+    const d = sgxCache.res[it.symbol]?.data, w = Number(it.weight) || 0;
+    if (!d || !d.price) return { ...it, d: null, w, q: 0, px: 0, v: 0 };
+    const px = bkLimit(d.price), q = Math.floor(amt * w / 100 / px);
+    return { ...it, d, w, px, q, v: q * px };
+  });
+}
+function bkRender() {
+  if (!$("bk-sel")) return;
+  const mine = bkList.filter(b => b.market === mkt);
+  $("bk-sel").innerHTML = `<option value="">New basket</option>` + mine.map(b => `<option value="${b.id}"${b.id === bkCur.id ? " selected" : ""}>${esc(b.name)}</option>`).join("");
+  $("bk-amt-lab").textContent = `Amount to invest (${bkMoney()})`;
+  const have = new Set(bkCur.items.map(i => i.symbol));
+  const opts = bkStocks().filter(r => !have.has(r.symbol));
+  $("bk-add").innerHTML = `<option value="">${opts.length ? "Choose…" : "Add stocks in Research first"}</option>` +
+    opts.map(r => `<option value="${esc(r.symbol)}">${esc(sgxLabel(r))} (${esc(shortSym(r.symbol))})</option>`).join("");
+  const plan = bkPlan();
+  $("bk-rows").innerHTML = plan.map((r, i) => `<div class="bk-row">
+      <div><b>${esc(r.d ? r.d.name : r.symbol)}</b> <span class="sub">${esc(shortSym(r.symbol))}</span>
+        <div class="sub bk-info">${r.d ? `${r.q} shares × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(r.d.sector || "")}` : "No price yet"}</div></div>
+      <input type="number" min="0" max="100" step="1" inputmode="numeric" value="${r.w}" data-bkw="${i}" aria-label="Weight % for ${esc(r.symbol)}">
+      <span class="x" data-bkx="${i}" aria-label="Remove">✕</span></div>`).join("")
+    || `<div class="empty">No stocks yet. Use "Add a stock" above.</div>`;
+  document.querySelectorAll("[data-bkw]").forEach(el => el.oninput = () => { bkCur.items[+el.dataset.bkw].weight = parseFloat(el.value) || 0; bkSum(); bkRowText(); });
+  document.querySelectorAll("[data-bkx]").forEach(el => el.onclick = () => { bkCur.items.splice(+el.dataset.bkx, 1); bkRender(); });
+  $("bk-del").style.display = bkCur.id ? "" : "none";
+  bkSum();
+}
+function bkRowText() {
+  bkPlan().forEach((r, i) => {
+    const sub = document.querySelectorAll("#bk-rows .bk-row")[i]?.querySelector(".bk-info");
+    if (sub && r.d) sub.textContent = `${r.q} shares × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${r.d.sector || ""}`;
+  });
+}
+function bkSum() {
+  const plan = bkPlan(), amt = parseFloat($("bk-amt").value) || 0, cur = bkMoney();
+  if (!plan.length) { $("bk-sum").innerHTML = ""; return; }
+  const wsum = plan.reduce((a, r) => a + r.w, 0), spent = plan.reduce((a, r) => a + r.v, 0);
+  const fees = plan.filter(r => r.q > 0).reduce((a, r) => a + ordFees(r.v, r.q, mkt === "US"), 0);
+  const sectors = {}; plan.forEach(r => { const k = r.d?.sector || "Unknown"; sectors[k] = (sectors[k] || 0) + r.w; });
+  const topSec = Object.entries(sectors).sort((a, b) => b[1] - a[1])[0];
+  const topStock = plan.slice().sort((a, b) => b.w - a.w)[0];
+  const warn = [];
+  if (Math.abs(wsum - 100) > 0.01) warn.push(`Weights add up to ${fmt(wsum, 0)}%, not 100%.`);
+  const zero = plan.filter(r => r.d && r.q === 0);
+  if (zero.length) warn.push(`Amount too small to buy even 1 share of ${zero.map(r => shortSym(r.symbol)).join(", ")}.`);
+  if (spent > 0 && fees / spent > 0.02) warn.push(`Fees are about ${(fees / spent * 100).toFixed(1)}% of the money. Fewer stocks or a bigger amount lowers this.`);
+  const row = (a, b) => `<div class="ord-row"><span>${a}</span><b>${b}</b></div>`;
+  $("bk-sum").innerHTML =
+    row("Stocks", plan.length) +
+    row("Bought now", `${cur}${fmt(spent, 2)}`) +
+    row("Cash left over", `${cur}${fmt(Math.max(amt - spent, 0), 2)}`) +
+    row("Fees, rough", `${cur}${fmt(fees, 2)}${spent ? ` (${(fees / spent * 100).toFixed(2)}%)` : ""}`) +
+    row("Industries", `${Object.keys(sectors).length}`) +
+    row("Biggest industry", `${esc(topSec[0])} ${fmt(topSec[1], 0)}%`) +
+    row("Biggest single stock", `${esc(shortSym(topStock.symbol))} ${fmt(topStock.w, 0)}%`) +
+    (warn.length ? `<div class="sub warn" style="margin-top:6px">${warn.map(esc).join("<br>")}</div>` : "");
+}
+function bkPick() {
+  const id = parseInt($("bk-sel").value, 10), b = bkList.find(x => x.id === id);
+  bkCur = b ? { id: b.id, name: b.name, items: (b.items || []).map(x => ({ ...x })) } : { id: null, name: "", items: [] };
+  $("bk-name").value = bkCur.name; bkRender();
+}
+function bkAdd() {
+  const sym = $("bk-add").value; if (!sym) return;
+  bkCur.items.push({ symbol: sym, weight: 0 }); bkEven();
+}
+function bkEven() {
+  const n = bkCur.items.length; if (!n) return;
+  const base = Math.floor(100 / n);
+  bkCur.items.forEach((it, i) => it.weight = base + (i < 100 - base * n ? 1 : 0));
+  bkRender();
+}
+async function bkSave() {
+  const name = $("bk-name").value.trim();
+  if (!name) return toast("Give the basket a name");
+  if (!bkCur.items.length) return toast("Add at least one stock");
+  if (!await needPass()) return;
+  const row = { name, market: mkt, items: bkCur.items.map(i => ({ symbol: i.symbol, weight: Number(i.weight) || 0 })), updated_at: new Date().toISOString() };
+  const q = bkCur.id ? sb.from("tb_baskets").update(row).eq("id", bkCur.id).select() : sb.from("tb_baskets").insert(row).select();
+  const { data, error } = await q;
+  if (error) return toast("Not saved: " + (error.message.includes("policy") ? "wrong passcode" : error.message.includes("duplicate") ? "that name is taken" : error.message));
+  bkCur.id = data?.[0]?.id ?? bkCur.id; bkCur.name = name;
+  toast("Basket saved"); bkLoad();
+}
+async function bkDelete() {
+  if (!bkCur.id || !await needPass()) return;
+  if (!await askConfirm(`Delete the basket "${bkCur.name}"? Orders already sent are not affected.`)) return;
+  const { error } = await sb.from("tb_baskets").delete().eq("id", bkCur.id);
+  if (error) return toast("Not deleted: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  bkCur = { id: null, name: "", items: [] }; $("bk-name").value = ""; toast("Basket deleted"); bkLoad();
+}
+async function bkBuy() {
+  const plan = bkPlan().filter(r => r.d && r.q > 0), cur = bkMoney();
+  if (!plan.length) return toast("Nothing to buy: add stocks and an amount");
+  const wsum = bkCur.items.reduce((a, r) => a + (Number(r.weight) || 0), 0);
+  if (Math.abs(wsum - 100) > 0.01) return toast("Weights must add up to 100%");
+  if (!await needPass()) return;
+  const spent = plan.reduce((a, r) => a + r.v, 0);
+  const lines = plan.map(r => `BUY ${r.q} ${shortSym(r.symbol)} @ ${cur}${fmt(r.px, r.px < 1 ? 3 : 2)}`).join("\n");
+  if (!await askConfirm(`PRACTICE ACCOUNT (fake money)\n\n${$("bk-name").value.trim() || "Basket"}: ${plan.length} orders, about ${cur}${fmt(spent, 2)} + fees\n\n${lines}\n\nSend all to Tiger?`)) return;
+  const rows = plan.map(r => ({ symbol: r.symbol, side: "BUY", qty: r.q, limit_price: r.px, currency: bkCcy(), mode: ORD_MODE }));
+  const { error } = await sb.from("tb_tiger_orders").insert(rows);
+  if (error) return toast("Not queued: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  toast(`${rows.length} orders queued: the laptop sends them within about 10 s`); loadOrders();
+}
+$("bk-sel").onchange = bkPick; $("bk-add").onchange = bkAdd; $("bk-even").onclick = bkEven;
+$("bk-save").onclick = bkSave; $("bk-del").onclick = bkDelete; $("bk-buy").onclick = bkBuy;
+$("bk-amt").oninput = () => { bkSum(); bkRowText(); };
+bkLoad();
 
 // ---- Candlestick charts (TradingView lightweight-charts, Apache-2.0).
 // Daily bars come from tb_chart_bars (scripts/chart_bars.py, refreshed with
