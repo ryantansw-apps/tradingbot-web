@@ -50,6 +50,9 @@
     .ord-f { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
     .ord-f label { display: block; font-size: 12px; color: var(--muted, #8a97a6); margin-bottom: 3px; }
     .ord-f input { width: 100%; box-sizing: border-box; }
+    .ord-f select { width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 10px 8px; font-size: 15px; }
+    .seg2 button.on-kind { background: var(--accent); color: #041022; }
+    .cc-sum .ord-row b { white-space: nowrap; }
     .ord-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
     .ord-row:last-child { border-bottom: 0; }
     .demo-tag { display: inline-block; background: #3a2f00; color: #ffd84d; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
@@ -243,17 +246,32 @@
     <div class="cbody">
     <div class="sub">Practice account: fake money, nothing real is bought. Stock = the one selected in Research above (SG or US).</div>
     <div style="margin-top:8px;font-weight:700" id="ord-stock">—</div>
-    <div class="seg2" style="margin-top:8px">
+    <div class="seg2" id="ord-kind" style="margin-top:8px;display:none">
+      <button class="ghost" id="kind-stock">Shares only</button>
+      <button class="ghost" id="kind-cc">Covered call</button>
+    </div>
+    <div class="seg2" id="ord-sides" style="margin-top:8px">
       <button class="ghost" id="ord-buy">Buy</button>
       <button class="ghost" id="ord-sell">Sell</button>
     </div>
     <div class="ord-f">
-      <div><label for="ord-qty">Shares</label><input type="number" id="ord-qty" min="1" step="1" inputmode="numeric" value="10"></div>
-      <div><label for="ord-px">Limit price</label><input type="number" id="ord-px" min="0" step="0.01" inputmode="decimal"></div>
+      <div><label for="ord-qty" id="ord-qty-lab">Shares</label><input type="number" id="ord-qty" min="1" step="1" inputmode="numeric" value="10"></div>
+      <div><label for="ord-px" id="ord-px-lab">Limit price</label><input type="number" id="ord-px" min="0" step="0.01" inputmode="decimal"></div>
+    </div>
+    <div id="cc-box" style="display:none">
+      <div class="ord-f">
+        <div><label for="cc-exp">Call expiry</label><select id="cc-exp"></select></div>
+        <div><label for="cc-strike">Strike (you sell at)</label><select id="cc-strike"></select></div>
+      </div>
+      <div class="ord-f">
+        <div><label for="cc-px">Call price per share</label><input type="number" id="cc-px" min="0" step="0.01" inputmode="decimal"></div>
+        <div></div>
+      </div>
+      <div class="cc-sum" id="cc-est" style="margin-top:8px"></div>
     </div>
     <div class="sub" id="ord-est" style="margin-top:8px"></div>
     <button id="ord-review" style="width:100%;margin-top:10px">Review order</button>
-    <div class="sub" style="margin-top:8px">Limit order, good for today only. It fills only at your price or better. Orders more than 10% from the last price, or above 2,000 in value (S$ or US$), are refused.</div>
+    <div class="sub" style="margin-top:8px" id="ord-rules">Limit order, good for today only. It fills only at your price or better. Orders more than 10% from the last price are refused.</div>
     <div class="sec" style="margin-top:12px">Recent orders</div>
     <div id="ord-list"><div class="empty">Loading…</div></div>
     </div>
@@ -923,15 +941,82 @@ function renderCmp() {
 // ---- Tiger orders (practice account). The phone only queues a row in
 // tb_tiger_orders; the laptop worker (scripts/tiger_orders.py) checks it and
 // sends it to Tiger. Nothing is sent without the Confirm tap below.
-let ordSide = "BUY", ordFor = "";
+let ordSide = "BUY", ordFor = "", ordKind = "stock";
 const ORD_MODE = "demo";
 function ordData() { return sgxCache.res[sgxSel]?.data || null; }
 function ordCur(d) { return d && d.currency === "USD" ? "USD" : "SGD"; }
 function ordStock() {
   const d = ordData();
   $("ord-stock").textContent = d ? `${d.name} (${sgxSel.replace(".SI", "")}) · last ${d.currency === "USD" ? "US$" : "S$"}${fmt(d.price, 2)}` : "Select a stock in Research";
-  if (d && ordFor !== sgxSel) { ordFor = sgxSel; $("ord-px").value = Number(d.price).toFixed(d.price < 1 ? 3 : 2); }
+  if (d && ordFor !== sgxSel) { ordFor = sgxSel; $("ord-px").value = Number(d.price).toFixed(d.price < 1 ? 3 : 2); ccFill(); }
+  // covered calls: US stocks only (SGX has no listed options)
+  $("ord-kind").style.display = d && ordUs() ? "" : "none";
+  if (!(d && ordUs()) && ordKind === "cc") ordSetKind("stock"); else ordEst();
+}
+
+// ---- Covered call: buy shares in lots of 100, then sell 1 call per 100.
+// Call prices come from the hourly research job (Yahoo). Bid/ask read 0
+// while the US market is shut, so the last traded premium is the guide.
+const ccChain = () => (ordData()?.options || []);
+function ccFill() {
+  const ch = ccChain();
+  const dd = (s) => new Date(s + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  $("cc-exp").innerHTML = ch.map((e, i) => `<option value="${i}">${dd(e.expiry)} · ${e.days}d</option>`).join("")
+    || `<option value="">No options listed yet</option>`;
+  ccStrikes();
+}
+function ccStrikes() {
+  const e = ccChain()[parseInt($("cc-exp").value, 10)];
+  const d = ordData(), px = parseFloat($("ord-px").value) || (d && d.price) || 0;
+  const calls = e ? e.calls : [];
+  // default: first strike at or above the share price
+  const pick = Math.max(0, calls.findIndex(c => c.strike >= px));
+  $("cc-strike").innerHTML = calls.map((c, i) => `<option value="${i}"${i === pick ? " selected" : ""}>$${fmt(c.strike, c.strike % 1 ? 2 : 0)} · ${fmt(c.bid > 0 ? c.bid : c.last, 2)}</option>`).join("")
+    || `<option value="">—</option>`;
+  ccPrem();
+}
+function ccCall() {
+  const e = ccChain()[parseInt($("cc-exp").value, 10)];
+  return e ? { exp: e, call: e.calls[parseInt($("cc-strike").value, 10)] } : null;
+}
+function ccPrem() {
+  const c = ccCall()?.call;
+  $("cc-px").value = c ? (c.bid > 0 ? c.bid : c.last).toFixed(2) : "";
   ordEst();
+}
+function ordSetKind(k) {
+  ordKind = k;
+  $("kind-stock").className = k === "stock" ? "on-kind" : "ghost";
+  $("kind-cc").className = k === "cc" ? "on-kind" : "ghost";
+  $("ord-sides").style.display = k === "cc" ? "none" : "";
+  $("cc-box").style.display = k === "cc" ? "" : "none";
+  $("ord-qty-lab").textContent = k === "cc" ? "Shares (lots of 100)" : "Shares";
+  $("ord-px-lab").textContent = k === "cc" ? "Share price (limit)" : "Limit price";
+  $("ord-qty").step = k === "cc" ? "100" : "1";
+  if (k === "cc") {
+    ordSetSide("BUY");
+    const q = parseInt($("ord-qty").value, 10);
+    if (!(q >= 100) || q % 100) $("ord-qty").value = 100;
+    ccFill();
+  }
+  ordEst();
+}
+function ccEst() {
+  const d = ordData(), q = parseInt($("ord-qty").value, 10), px = parseFloat($("ord-px").value), prem = parseFloat($("cc-px").value);
+  const sel = ccCall();
+  if (!d || !sel || !sel.call) { $("cc-est").innerHTML = `<div class="empty">No call prices for this stock yet. A stock that has just listed may have no options.</div>`; return null; }
+  if (!(q >= 100) || q % 100 || !(px > 0) || !(prem > 0)) { $("cc-est").innerHTML = `<div class="sub">Shares must be 100, 200, 300 and so on. 1 call covers 100 shares.</div>`; return null; }
+  const k = sel.call.strike, n = q / 100, cost = q * px, got = q * prem, net = cost - got;
+  const maxP = (k - px) * q + got, be = px - prem;
+  const row = (a, b) => `<div class="ord-row"><span>${a}</span><b>${b}</b></div>`;
+  $("cc-est").innerHTML =
+    row(`Buy ${q} shares at US$${fmt(px, 2)}`, `US$${fmt(cost, 2)}`) +
+    row(`Sell ${n} call${n > 1 ? "s" : ""} (US$${fmt(k, 2)}, ${esc(sel.exp.expiry)}) at US$${fmt(prem, 2)}`, `+US$${fmt(got, 2)}`) +
+    row("Your money in, after the call", `US$${fmt(net, 2)}`) +
+    row(`Most you can make (if above US$${fmt(k, 2)} on ${esc(sel.exp.expiry)})`, `<span class="${maxP >= 0 ? "up" : "down"}">${maxP >= 0 ? "+" : ""}US$${fmt(maxP, 2)} (${(maxP / net * 100).toFixed(1)}%)</span>`) +
+    row("Break-even share price", `US$${fmt(be, 2)}`) +
+    `<div class="sub" style="margin-top:6px">If the share price is above US$${fmt(k, 2)} on expiry, your ${q} shares are sold at US$${fmt(k, 2)}. If it is below, you keep the shares and the US$${fmt(got, 2)}. Below US$${fmt(be, 2)} you are losing money: the call only cushions a fall. Plus fees on both parts. The call is sold only after the shares are bought.</div>`;
+  return { q, px, prem, k, n, cost, got, net, exp: sel.exp.expiry };
 }
 function ordFees(v, q, us) {
   // Rough Tiger SG schedules, then 9% GST. An estimate, not a quote.
@@ -943,6 +1028,7 @@ function ordFees(v, q, us) {
 }
 const ordUs = () => !sgxSel.endsWith(".SI");
 function ordEst() {
+  if (ordKind === "cc") { $("ord-est").textContent = ""; ccEst(); return; }
   const d = ordData(), q = parseInt($("ord-qty").value, 10), px = parseFloat($("ord-px").value);
   if (!d || !(q > 0) || !(px > 0)) { $("ord-est").textContent = ""; return; }
   const cur = d.currency === "USD" ? "US$" : "S$", v = q * px, f = ordFees(v, q, ordUs());
@@ -956,8 +1042,20 @@ function ordSetSide(sd) {
   $("ord-sell").className = sd === "SELL" ? "on-sell" : "ghost";
   ordEst();
 }
+async function ccReview(d) {
+  const c = ccEst();
+  if (!c) return toast("Check shares (lots of 100) and the call");
+  if (!await needPass()) return;
+  const ok = await askConfirm(`PRACTICE ACCOUNT (fake money)\n\nCOVERED CALL on ${d.name} (${sgxSel})\n1) Buy ${c.q} shares, limit US$${fmt(c.px, 2)}, good for today\n2) Then sell ${c.n} call${c.n > 1 ? "s" : ""}: strike US$${fmt(c.k, 2)}, expiry ${c.exp}, limit US$${fmt(c.prem, 2)}\n\nShares about US$${fmt(c.cost, 2)}, call brings in about US$${fmt(c.got, 2)}, plus fees.\nStep 2 happens only if step 1 fills.\n\nSend to Tiger?`);
+  if (!ok) return;
+  const { error } = await sb.from("tb_tiger_orders").insert({ symbol: sgxSel, side: "BUY", qty: c.q, limit_price: Math.round(c.px * 100) / 100,
+    currency: "USD", mode: ORD_MODE, strategy: "covered_call", opt_expiry: c.exp, opt_strike: c.k, opt_price: Math.round(c.prem * 100) / 100 });
+  if (error) return toast("Order not queued: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
+  toast("Covered call queued: the laptop sends it within about 10 s"); loadOrders();
+}
 async function ordReview() {
   const d = ordData(); if (!d) return toast("Select a stock in Research first");
+  if (ordKind === "cc") return ccReview(d);
   const q = parseInt($("ord-qty").value, 10), px = Math.round(parseFloat($("ord-px").value) * 1000) / 1000;
   if (!(q > 0)) return toast("Enter a whole number of shares");
   if (!(px > 0)) return toast("Enter a limit price");
@@ -979,6 +1077,15 @@ async function loadOrders() {
     const [lab, c] = ORD_ST[o.status] || [o.status, ""];
     const cur = o.currency === "USD" ? "US$" : "S$";
     const fill = o.filled_qty > 0 ? ` · filled ${o.filled_qty}${o.avg_fill_price ? " @ " + cur + fmt(o.avg_fill_price, 2) : ""}` : "";
+    if (o.strategy === "covered_call") {
+      const [ol, oc] = o.opt_status ? (ORD_ST[o.opt_status] || [o.opt_status, ""]) : [lab, c];
+      const leg = `sell ${o.qty / 100} × US$${fmt(o.opt_strike, 2)} call ${esc(o.opt_expiry)} @ US$${fmt(o.opt_price, 2)}`;
+      const ofill = o.opt_filled > 0 ? ` · call sold ${o.opt_filled}${o.opt_avg_price ? " @ US$" + fmt(o.opt_avg_price, 2) : ""}` : "";
+      return `<div class="ord-row"><div><b>Covered call: ${o.qty} ${esc(o.symbol)}</b> @ US$${fmt(o.limit_price, 2)}
+        <div class="sub">then ${leg}</div>
+        <div class="sub">${ago(o.created_at)}${o.mode === "demo" ? " · practice" : " · LIVE"}${fill}${ofill}${o.message ? " · " + esc(o.message) : ""}</div></div>
+        <div class="${oc}" style="white-space:nowrap;font-weight:700">${esc(ol)}${o.status === "queued" ? " …" : ""}</div></div>`;
+    }
     return `<div class="ord-row"><div><b>${esc(o.side)} ${o.qty} ${esc(o.symbol.replace(".SI", ""))}</b> @ ${cur}${fmt(o.limit_price, 2)}
       <div class="sub">${ago(o.created_at)}${o.mode === "demo" ? " · practice" : " · LIVE"}${fill}${o.message ? " · " + esc(o.message) : ""}</div></div>
       <div class="${c}" style="white-space:nowrap;font-weight:700">${esc(lab)}${o.status === "queued" ? " …" : ""}</div></div>`;
@@ -987,8 +1094,11 @@ async function loadOrders() {
 $("ord-buy").onclick = () => ordSetSide("BUY");
 $("ord-sell").onclick = () => ordSetSide("SELL");
 $("ord-qty").oninput = ordEst; $("ord-px").oninput = ordEst;
+$("kind-stock").onclick = () => ordSetKind("stock");
+$("kind-cc").onclick = () => ordSetKind("cc");
+$("cc-exp").onchange = ccStrikes; $("cc-strike").onchange = ccPrem; $("cc-px").oninput = ordEst;
 $("ord-review").onclick = ordReview;
-ordSetSide("BUY");
+ordSetSide("BUY"); ordSetKind("stock");
 
 // ---- Candlestick charts (TradingView lightweight-charts, Apache-2.0).
 // Daily bars come from tb_chart_bars (scripts/chart_bars.py, refreshed with
