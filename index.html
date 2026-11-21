@@ -55,7 +55,7 @@
     #ord-kind { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .cc-sum .ord-row b { white-space: nowrap; }
     .bk-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px 24px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
-    .bk-row input { width: 100%; box-sizing: border-box; text-align: right; }
+    .bk-row input { width: 100%; box-sizing: border-box; text-align: right; padding: 7px 8px; font-size: 15px; }
     .bk-row .x { width: 24px; height: 24px; border-radius: 50%; background: var(--line); display: grid; place-items: center; font-size: 12px; cursor: pointer; }
     .bk-btns { display: flex; gap: 8px; margin-top: 10px; }
     .bk-nav { display: grid; grid-template-columns: 56px 1fr 56px; gap: 8px; align-items: center; margin-top: 8px; text-align: center; font-size: 13px; }
@@ -63,6 +63,25 @@
     .pf-leg div { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 2px 0; }
     .pf-leg i { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; display: block; }
     .pf-leg b { margin-left: auto; font-variant-numeric: tabular-nums; }
+    .pf-head { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .pf-head .sec { margin: 0; padding: 0; border: 0; }
+    .pf-x { font-size: 12px; padding: 5px 10px; border-radius: 999px; }
+    .pf-kpi { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+    .pf-kpi div { background: var(--panel2); border-radius: 10px; padding: 8px 9px; min-width: 0; }
+    .pf-kpi .l { display: block; font-size: 11px; color: var(--muted, #8a97a6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pf-kpi b { display: block; font-size: 17px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .pf-kpi small { display: block; font-size: 10.5px; color: var(--muted, #8a97a6); }
+    .pf-sub { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted, #8a97a6); margin: 16px 0 4px; }
+    .pf-why { display: none; }
+    body.pf-explain .pf-why { display: block; }
+    .pf-bars div { display: grid; grid-template-columns: 52px minmax(0, 1fr) 76px; gap: 8px; align-items: center; font-size: 12px; padding: 3px 0; }
+    .pf-bars .trk { position: relative; height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
+    .pf-bars .trk i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; }
+    .pf-bars .trk em { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); opacity: .55; }
+    .pf-bars b { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .pf-hm { display: grid; gap: 2px; font-size: 10px; margin-top: 6px; }
+    .pf-hm span { display: grid; place-items: center; height: 28px; border-radius: 3px; font-variant-numeric: tabular-nums; }
+    .pf-hm .lab { height: auto; color: var(--muted, #8a97a6); overflow: hidden; white-space: nowrap; }
     .pf-m { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
     .pf-m:last-child { border-bottom: 0; }
     .pf-m .t { display: flex; justify-content: space-between; gap: 8px; }
@@ -101,6 +120,8 @@
     .pill.C { background: rgba(245,185,66,.18); color: var(--warn); } .pill.D { background: rgba(255,92,92,.18); color: var(--down); }
     .pill.long { color: var(--up); } .pill.short { color: var(--down); }
     .row { display: flex; gap: 8px; align-items: center; }
+    input[type=number], select { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 10px 12px; font-size: 16px; font-variant-numeric: tabular-nums; }
+    input[type=number]:focus, select:focus, input[type=text]:focus, input[type=password]:focus { outline: none; border-color: var(--accent); }
     input[type=text], input[type=password] { flex: 1; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 11px 12px; font-size: 16px; text-transform: uppercase; }
     button { background: var(--accent); color: #041022; border: 0; border-radius: 10px; padding: 11px 14px; font-weight: 700; font-size: 14px; cursor: pointer; }
     button.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
@@ -454,7 +475,9 @@ function renderStatus(s, positions) {
   const stale = (Date.now() - new Date(s.updated_at)) > 120000;
   const state = stale ? "offline" : (s.session_state || "offline");
   dot.className = "dot " + (state === "trading" ? "live" : state === "pre_open" ? "warn" : "off");
-  sub.textContent = `${state.replace("_"," ")} · ${s.mode || "?"} · ${(s.symbols_active||[]).join(", ") || "no symbols"} · ${ago(s.updated_at)}`;
+  const syms = s.symbols_active || [];
+  sub.textContent = `${state.replace("_"," ")} · ${s.mode || "?"} · ${syms.length ? syms.length + " symbols" : "no symbols"} · ${ago(s.updated_at)}`;
+  sub.title = syms.join(", ");
   banners.innerHTML = (s.kill_switch ? `<div class="banner kill">🛑 Kill switch engaged — no new orders</div>` : "")
     + (s.breaker_tripped ? `<div class="banner brk">⚠ Daily-loss breaker tripped — no new trades this session</div>` : "");
   const unreal = positions.reduce((a,p)=>a + Number(p.unrealized_pl||0), 0);
@@ -1295,7 +1318,7 @@ function bkStocks() {
 }
 async function bkLoad() {
   const [b, u] = await Promise.all([sb.from("tb_baskets").select("*").order("name"),
-    sb.from("tb_universe").select("symbol,market,name,sector,currency,price,avg_value,in_pool,beta,vol,ret_1y")]);
+    sb.from("tb_universe").select("symbol,market,name,sector,currency,price,avg_value,in_pool,beta,vol,ret_1y,pe_fwd,div_yield,mcap")]);
   if (!b.error) bkList = b.data || [];
   if (!u.error) { bkUni = {}; (u.data || []).forEach(r => { r.price = Number(r.price); r.avg_value = Number(r.avg_value); bkUni[r.symbol] = r; }); }
   bkRender();
@@ -1362,20 +1385,21 @@ function bkSum() {
   bkPortSoon();
 }
 
-// ---- Portfolio check: sector pie + risk numbers from 1 year of daily closes
-// (tb_universe.hist). Weights = money actually bought (whole shares).
+// ---- Portfolio check (pro view). Weights = money actually bought (whole
+// shares). Risk/return numbers come from 1 year of daily closes
+// (tb_universe.hist), aligned on the dates every holding and the benchmark
+// share. Benchmarks: SPY for US, ES3.SI (SPDR STI ETF) for SGX.
 const bkHist = {};
-let bkPortT = null;
+let bkPortT = null, bkChart = null;
 function bkPortSoon() { clearTimeout(bkPortT); bkPortT = setTimeout(bkPort, 250); }
 const pfPct = (x, d = 1) => x == null || !isFinite(x) ? "—" : `${x >= 0 ? "" : "-"}${fmt(Math.abs(x) * 100, d)}%`;
-function stdev(a) { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / (a.length - 1)); }
-function corr(a, b) {
-  const n = a.length, ma = a.reduce((x, y) => x + y, 0) / n, mb = b.reduce((x, y) => x + y, 0) / n;
-  let c = 0, va = 0, vb = 0;
-  for (let i = 0; i < n; i++) { c += (a[i] - ma) * (b[i] - mb); va += (a[i] - ma) ** 2; vb += (b[i] - mb) ** 2; }
-  return va && vb ? c / Math.sqrt(va * vb) : null;
-}
+const pfNum = (x, d = 2) => x == null || !isFinite(x) ? "—" : fmt(x, d);
+const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+function stdev(a) { const m = mean(a); return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / (a.length - 1)); }
+function cov(a, b) { const ma = mean(a), mb = mean(b); let c = 0; for (let i = 0; i < a.length; i++) c += (a[i] - ma) * (b[i] - mb); return c / (a.length - 1); }
+function corr(a, b) { const sa = stdev(a), sb2 = stdev(b); return sa && sb2 ? cov(a, b) / (sa * sb2) : null; }
 function maxDD(vals) { let peak = vals[0], dd = 0; vals.forEach(v => { peak = Math.max(peak, v); dd = Math.min(dd, v / peak - 1); }); return dd; }
+function quantile(a, q) { const b = a.slice().sort((x, y) => x - y), i = (b.length - 1) * q, lo = Math.floor(i); return b[lo] + (b[Math.min(lo + 1, b.length - 1)] - b[lo]) * (i - lo); }
 function bkPie(parts) {
   const R = 52, C = 2 * Math.PI * R; let off = 0;
   const segs = parts.map(([name, w]) => { const len = w * C;
@@ -1385,70 +1409,173 @@ function bkPie(parts) {
     <text x="66" y="62" text-anchor="middle" font-size="11" fill="var(--muted, #8a97a6)">Industries</text>
     <text x="66" y="80" text-anchor="middle" font-size="18" font-weight="700" fill="var(--text)">${parts.length}</text></svg>`;
 }
+const pfExplainKey = "tb_pf_explain";
+try { if (localStorage.getItem(pfExplainKey) === "1") document.body.classList.add("pf-explain"); } catch (_) {}
+function pfToggleExplain() {
+  const on = document.body.classList.toggle("pf-explain");
+  try { localStorage.setItem(pfExplainKey, on ? "1" : "0"); } catch (_) {}
+  const b = $("pf-x"); if (b) b.textContent = on ? "Hide explanations" : "Explain";
+}
+// metric row: label, value, plain-English meaning (shown with "Explain")
+const pfRow = (t, v, why) => `<div class="pf-m"><div class="t"><span>${t}</span><b>${v}</b></div>${why ? `<div class="sub pf-why">${why}</div>` : ""}</div>`;
+const SIZE_BANDS = [["Mega", 200e9], ["Large", 10e9], ["Mid", 2e9], ["Small", 0]];
 async function bkPort() {
   const box = $("bk-port"); if (!box) return;
   const plan = bkPlan().filter(r => r.d && r.v > 0);
   if (!plan.length) { box.innerHTML = ""; return; }
-  const total = plan.reduce((a, r) => a + r.v, 0);
-  const W = plan.map(r => ({ sym: r.symbol, w: r.v / total, sector: secName(r.d.sector) }));
-  // sector pie
-  const secs = {}; W.forEach(x => secs[x.sector] = (secs[x.sector] || 0) + x.w);
-  const parts = Object.entries(secs).sort((a, b) => b[1] - a[1]);
-  const leg = parts.map(([n, w]) => `<div><i style="background:${secCol(n)}"></i><span>${esc(n)}</span><b>${fmt(w * 100, 0)}%</b></div>`).join("");
-  const bench = mkt === "US" ? "SPY" : "ES3.SI", bname = mkt === "US" ? "S&amp;P 500 (SPY)" : "STI (ES3)";
-  box.innerHTML = `<div class="sec">Portfolio check</div><div class="pf-pie">${bkPie(parts)}<div class="pf-leg">${leg}</div></div>
-    <div class="sub" style="margin-top:4px">Share of your money in each industry.</div><div id="bk-risk"><div class="empty">Working out risk…</div></div>`;
-  // history for basket stocks + benchmark (cached per session)
+  const cur = bkMoney(), total = plan.reduce((a, r) => a + r.v, 0);
+  const W = plan.map(r => ({ sym: r.symbol, w: r.v / total, sector: secName(r.d.sector), u: bkUni[r.symbol] || {} }));
+  const bench = mkt === "US" ? "SPY" : "ES3.SI", bname = mkt === "US" ? "S&amp;P 500" : "STI", bshort = mkt === "US" ? "S&P 500" : "STI";
+  const on = document.body.classList.contains("pf-explain");
+  box.innerHTML = `<div class="pf-head"><div class="sec">Portfolio check</div><button class="ghost pf-x" id="pf-x">${on ? "Hide explanations" : "Explain"}</button></div>
+    <div id="pf-body"><div class="empty">Working out the numbers…</div></div>`;
+  $("pf-x").onclick = pfToggleExplain;
   const need = [...W.map(x => x.sym), bench].filter(sy => !(sy in bkHist));
   if (need.length) {
     const { data, error } = await sb.from("tb_universe").select("symbol,hist").in("symbol", need);
-    if (error) { $("bk-risk").innerHTML = `<div class="empty">Could not load price history.</div>`; return; }
+    if (error) { $("pf-body").innerHTML = `<div class="empty">Could not load price history.</div>`; return; }
     need.forEach(sy => bkHist[sy] = null);
     (data || []).forEach(r => bkHist[r.symbol] = r.hist || null);
   }
   if ($("bk-port") !== box) return;
-  const m = (t, v, why) => `<div class="pf-m"><div class="t"><span>${t}</span><b>${v}</b></div><div class="sub">${why}</div></div>`;
-  const out = [];
-  // beta: weighted average of each stock's beta
-  let bsum = 0, bw = 0; W.forEach(x => { const b = bkUni[x.sym]?.beta; if (b != null) { bsum += x.w * Number(b); bw += x.w; } });
-  const beta = bw ? bsum / bw : null;
-  out.push(m(`Beta vs ${bname}`, beta == null ? "—" : fmt(beta, 2),
-    beta == null ? "Not enough price history yet." : `If the market moves 1%, this basket has tended to move about ${fmt(Math.abs(beta), 2)}%${beta < 0 ? " the opposite way" : ""}. Below 1 = calmer than the market, above 1 = bumpier.` +
-    (bw < 0.999 ? ` Covers ${fmt(bw * 100, 0)}% of the money (some stocks are too new).` : "")));
+
+  // ---- exposure (no history needed)
+  const secs = {}; W.forEach(x => secs[x.sector] = (secs[x.sector] || 0) + x.w);
+  const parts = Object.entries(secs).sort((a, b) => b[1] - a[1]);
+  const leg = parts.map(([n, w]) => `<div><i style="background:${secCol(n)}"></i><span>${esc(n)}</span><b>${fmt(w * 100, 0)}%</b></div>`).join("");
+  const size = {}; let sizeKnown = 0;
+  W.forEach(x => { const mc = Number(x.u.mcap); if (mc > 0) { const band = SIZE_BANDS.find(([, lo]) => mc >= lo)[0]; size[band] = (size[band] || 0) + x.w; sizeKnown += x.w; } });
+  const sizeTxt = SIZE_BANDS.filter(([b]) => size[b]).map(([b]) => `${b} ${fmt(size[b] * 100, 0)}%`).join(" · ") || "—";
+  // forward P/E: harmonic weighted mean (the right way to average P/E), skipping missing / negative
+  let inv = 0, invW = 0; W.forEach(x => { const pe = Number(x.u.pe_fwd); if (pe > 0) { inv += x.w / pe; invW += x.w; } });
+  const peFwd = invW ? invW / inv : null;
+  let dy = 0, dyW = 0; W.forEach(x => { if (x.u.div_yield != null) { dy += x.w * Number(x.u.div_yield); dyW += x.w; } });
+  const divY = dyW ? dy / dyW : null;   // percent
   const effN = 1 / W.reduce((a, x) => a + x.w * x.w, 0);
-  out.push(m("Effective number of stocks", fmt(effN, 1), `How spread out the money really is. ${W.length} stocks in equal amounts = ${W.length}; one big holding pulls it down.`));
-  // risk from aligned daily returns
+  const top = W.slice().sort((a, b) => b.w - a.w)[0];
+
+  // ---- history-based stats
   const H = W.filter(x => Array.isArray(bkHist[x.sym]) && bkHist[x.sym].length >= 60);
-  const bh = bkHist[bench];
+  const bh = Array.isArray(bkHist[bench]) ? bkHist[bench] : null;
   let dates = null;
   [...H.map(x => bkHist[x.sym]), ...(bh ? [bh] : [])].forEach(h => { const set = new Set(h.map(p => p[0])); dates = dates ? dates.filter(d => set.has(d)) : h.map(p => p[0]); });
-  if (H.length && dates && dates.length >= 60) {
+  let st = null;
+  if (H.length && bh && dates && dates.length >= 60) {
     const px = (h) => { const mp = new Map(h); return dates.map(d => mp.get(d)); };
-    const P = H.map(x => px(bkHist[x.sym])), wsum = H.reduce((a, x) => a + x.w, 0), w = H.map(x => x.w / wsum);
+    const P = H.map(x => px(bkHist[x.sym])), ws = H.reduce((a, x) => a + x.w, 0), w = H.map(x => x.w / ws);
     const R = P.map(p => p.slice(1).map((v, i) => v / p[i] - 1));
-    const port = R[0].map((_, t) => R.reduce((a, r, i) => a + w[i] * r[t], 0));
-    const vol = stdev(port) * Math.sqrt(252), vols = R.map(r => stdev(r) * Math.sqrt(252));
-    const avgVol = vols.reduce((a, v, i) => a + w[i] * v, 0);
-    const value = dates.map((_, t) => P.reduce((a, p, i) => a + w[i] * p[t] / p[0], 0));
-    const ret = value[value.length - 1] - 1, dd = maxDD(value);
-    const sharpe = (port.reduce((a, x) => a + x, 0) / port.length) * 252 / vol;
-    let cs = 0, cn = 0; for (let i = 0; i < R.length; i++) for (let j = i + 1; j < R.length; j++) { const c = corr(R[i], R[j]); if (c != null) { cs += c; cn++; } }
-    const avgC = cn ? cs / cn : null;
-    let bRet = null, bVol = null, bDD = null;
-    if (bh) { const bp = px(bh), br = bp.slice(1).map((v, i) => v / bp[i] - 1); bRet = bp[bp.length - 1] / bp[0] - 1; bVol = stdev(br) * Math.sqrt(252); bDD = maxDD(bp.map(v => v / bp[0])); }
-    const yrs = (dates.length - 1) / 252;
-    out.push(m("Expected yearly swing (volatility)", pfPct(vol, 0), `A typical year moves within about ±${fmt(vol * 100, 0)}% of the average. ${bname}: ${pfPct(bVol, 0)}.`));
-    out.push(m("Diversification benefit", pfPct(1 - vol / avgVol, 0), `Mixing these stocks cut the swing from ${pfPct(avgVol, 0)} (their average) to ${pfPct(vol, 0)}, because they do not all move together.`));
-    if (avgC != null) out.push(m("Average correlation", fmt(avgC, 2), `How alike the stocks move: 1 = in lockstep, 0 = unrelated, below 0 = opposite. Lower spreads risk better.`));
-    out.push(m(`Last ${yrs > 0.95 ? "1 year" : fmt(yrs * 12, 0) + " months"} if held`, `<span class="${ret >= 0 ? "up" : "down"}">${pfPct(ret, 1)}</span>`, `Same mix bought ${yrs > 0.95 ? "a year" : "that long"} ago and held. ${bname}: ${pfPct(bRet, 1)}. Past results do not predict the future.`));
-    out.push(m("Worst drop along the way", `<span class="down">${pfPct(dd, 1)}</span>`, `Biggest fall from a high point to a later low in that period. ${bname}: ${pfPct(bDD, 1)}.`));
-    out.push(m("Sharpe ratio (risk-free 0%)", fmt(sharpe, 2), `Return per unit of swing over the period. Higher is better; around 1 is good, below 0 means it lost money.`));
-    if (H.length < W.length) out.push(`<div class="sub warn" style="margin-top:6px">Left out of the risk numbers (too little history): ${W.filter(x => !H.includes(x)).map(x => esc(shortSym(x.sym))).join(", ")}.</div>`);
-  } else {
-    out.push(`<div class="sub" style="margin-top:6px">Not enough shared price history yet for swing, correlation and past returns.</div>`);
+    const rp = R[0].map((_, t) => R.reduce((a, r, i) => a + w[i] * r[t], 0));   // daily, fixed weights
+    const bp = px(bh), rb = bp.slice(1).map((v, i) => v / bp[i] - 1);
+    const value = dates.map((_, t) => P.reduce((a, p, i) => a + w[i] * p[t] / p[0], 0));   // buy and hold
+    const bval = bp.map(v => v / bp[0]);
+    const vol = stdev(rp) * Math.sqrt(252), bvol = stdev(rb) * Math.sqrt(252);
+    const vols = R.map(r => stdev(r) * Math.sqrt(252)), avgVol = vols.reduce((a, v, i) => a + w[i] * v, 0);
+    const beta = cov(rp, rb) / (stdev(rb) ** 2);
+    const alpha = (mean(rp) - beta * mean(rb)) * 252;
+    const r2 = corr(rp, rb) ** 2;
+    const act = rp.map((x, i) => x - rb[i]), te = stdev(act) * Math.sqrt(252), ir = te ? mean(act) * 252 / te : null;
+    const ret = value[value.length - 1] - 1, bret = bval[bval.length - 1] - 1;
+    const dd = maxDD(value), bdd = maxDD(bval);
+    const sharpe = mean(rp) * 252 / vol;
+    const down = Math.sqrt(mean(rp.map(x => Math.min(x, 0) ** 2))) * Math.sqrt(252);
+    const sortino = down ? mean(rp) * 252 / down : null;
+    const calmar = dd < 0 ? ret / Math.abs(dd) : null;
+    const var95 = -quantile(rp, 0.05);
+    const tail = rp.filter(x => x <= -var95), cvar95 = tail.length ? -mean(tail) : var95;
+    const up = rb.map((x, i) => [x, rp[i]]).filter(([x]) => x > 0), dn = rb.map((x, i) => [x, rp[i]]).filter(([x]) => x < 0);
+    const upCap = up.length ? mean(up.map(a => a[1])) / mean(up.map(a => a[0])) : null;
+    const dnCap = dn.length ? mean(dn.map(a => a[1])) / mean(dn.map(a => a[0])) : null;
+    const months = []; for (let t = 21; t < value.length; t += 21) months.push(value[t] / value[t - 21] - 1);
+    // risk contribution: w_i * (cov matrix . w)_i / portfolio variance
+    const C = R.map(a => R.map(b => cov(a, b))), varP = w.reduce((a, wi, i) => a + wi * C[i].reduce((s2, c, j) => s2 + c * w[j], 0), 0);
+    const rc = w.map((wi, i) => wi * C[i].reduce((s2, c, j) => s2 + c * w[j], 0) / varP);
+    const corrM = R.map(a => R.map(b => corr(a, b)));
+    let cs = 0, cn = 0; for (let i = 0; i < R.length; i++) for (let j = i + 1; j < R.length; j++) { if (corrM[i][j] != null) { cs += corrM[i][j]; cn++; } }
+    st = { vol, bvol, avgVol, beta, alpha, r2, te, ir, ret, bret, dd, bdd, sharpe, bsharpe: mean(rb) * 252 / bvol, sortino, calmar, var95, cvar95,
+      upCap, dnCap, months, rc, corrM, avgC: cn ? cs / cn : null, value, bval, dates, H, yrs: (dates.length - 1) / 252 };
   }
-  out.push(`<div class="sub" style="margin-top:6px">From daily closing prices over the last year (Yahoo), refreshed hourly. Facts about the past, not advice.</div>`);
-  if ($("bk-port") === box) $("bk-risk").innerHTML = out.join("");
+  // fall back to weighted stock betas when there is no shared history
+  let wb = 0, wbW = 0; W.forEach(x => { if (x.u.beta != null) { wb += x.w * Number(x.u.beta); wbW += x.w; } });
+  const beta = st ? st.beta : (wbW ? wb / wbW : null);
+
+  const span = st ? (st.yrs > 0.95 ? "1y" : `${fmt(st.yrs * 12, 0)}m`) : "1y";
+  const kpi = (l, v, sm) => `<div><span class="l">${l}</span><b>${v}</b>${sm ? `<small>${sm}</small>` : ""}</div>`;
+  const tone = (x) => `<span class="${x >= 0 ? "up" : "down"}">${pfPct(x, 1)}</span>`;
+  let h = `<div class="pf-kpi">
+    ${kpi(`Return ${span}`, st ? tone(st.ret) : "—", st ? `${bshort} ${pfPct(st.bret, 1)}` : "")}
+    ${kpi("Volatility", st ? pfPct(st.vol, 0) : "—", st ? `${bshort} ${pfPct(st.bvol, 0)}` : "")}
+    ${kpi("Max drawdown", st ? `<span class="down">${pfPct(st.dd, 0)}</span>` : "—", st ? `${bshort} ${pfPct(st.bdd, 0)}` : "")}
+    ${kpi("Beta", pfNum(beta), `vs ${bshort}`)}
+    ${kpi("Sharpe", st ? pfNum(st.sharpe) : "—", st ? `${bshort} ${pfNum(st.bsharpe)}` : "")}
+    ${kpi("Div. yield", divY == null ? "—" : `${fmt(divY, 1)}%`, divY == null ? "" : `≈ ${cur}${fmt(total * divY / 100, 0)} / yr`)}
+  </div>`;
+  if (st) h += `<div class="pf-sub">${cur}${fmt(total, 0)} invested ${span === "1y" ? "a year" : span} ago vs the ${bname}</div><div id="pf-chart" style="height:170px"></div>`;
+  // exposure
+  h += `<div class="pf-sub">Exposure</div><div class="pf-pie">${bkPie(parts)}<div class="pf-leg">${leg}</div></div>`;
+  h += pfRow("Company size", sizeTxt, "Mega = over 200b market value, Large 10 to 200b, Mid 2 to 10b, Small under 2b. Bigger companies tend to swing less.") +
+    pfRow("Forward P/E", peFwd ? fmt(peFwd, 1) : "—", "Price you pay per 1 of next year's expected profit, averaged the way funds do it (harmonic). Lower = cheaper, but cheap can be cheap for a reason.") +
+    pfRow("Dividend yield", divY == null ? "—" : `${fmt(divY, 2)}%`, `Yearly cash paid out as dividends, about ${cur}${fmt(total * (divY || 0) / 100, 0)} on this basket if payouts hold.`) +
+    pfRow("Market", mkt === "US" ? "US · US$" : "Singapore · S$", "Where the shares trade and the currency your money is in.");
+  // risk
+  if (st) {
+    const rcBars = st.H.map((x, i) => ({ sym: x.sym, w: x.w / st.H.reduce((a, y) => a + y.w, 0), rc: st.rc[i] })).sort((a, b) => b.rc - a.rc);
+    const mx = Math.max(...rcBars.map(b => Math.max(b.rc, b.w)), 0.01);
+    h += `<div class="pf-sub">Risk</div>` +
+      pfRow("Bad day (1 in 20)", `<span class="down">-${cur}${fmt(st.var95 * total, 0)}</span>`, `Value at Risk, 95%: on about 1 trading day in 20 the basket fell more than ${pfPct(st.var95, 1)}.`) +
+      pfRow("Average of those bad days", `<span class="down">-${cur}${fmt(st.cvar95 * total, 0)}</span>`, `Expected shortfall (CVaR): when a 1-in-20 bad day comes, the average loss is ${pfPct(st.cvar95, 1)}.`) +
+      pfRow(`If the ${bshort} falls 10%`, `<span class="down">-${cur}${fmt(Math.max(beta, 0) * 0.10 * total, 0)}</span>`, `Rough estimate from beta: ${pfNum(beta)} × 10%. Real crashes can hit harder because stocks start moving together.`) +
+      pfRow("Best / worst month", `<span class="up">${pfPct(Math.max(...st.months), 1)}</span> / <span class="down">${pfPct(Math.min(...st.months), 1)}</span>`, "Best and worst 21-trading-day stretch in the period.") +
+      `<div class="pf-sub" style="margin-top:12px">Where the risk comes from</div>
+       <div class="pf-bars">${rcBars.map(b => `<div><span>${esc(shortSym(b.sym))}</span><div class="trk"><i style="width:${Math.max(b.rc, 0) / mx * 100}%;background:${b.rc > b.w * 1.25 ? "var(--down)" : "var(--accent)"}"></i><em style="left:${b.w / mx * 100}%"></em></div><b>${pfPct(b.rc, 0)}</b></div>`).join("")}</div>
+       <div class="sub pf-why">Bar = share of the basket's total swing caused by that stock. Line = share of the money in it. A red bar means it adds much more risk than its money share.</div>`;
+    // correlation heatmap
+    const n = st.H.length;
+    if (n >= 2) {
+      const col = (c) => c == null ? "var(--panel2)" : c >= 0 ? `rgba(227,73,72,${0.15 + 0.75 * c})` : `rgba(42,120,214,${0.15 + 0.75 * -c})`;
+      let g = `<span class="lab"></span>` + st.H.map(x => `<span class="lab">${esc(shortSym(x.sym))}</span>`).join("");
+      st.H.forEach((x, i) => { g += `<span class="lab">${esc(shortSym(x.sym))}</span>` + st.H.map((_, j) => i === j ? `<span style="background:var(--panel2)">—</span>` : `<span style="background:${col(st.corrM[i][j])}">${pfNum(Math.abs(st.corrM[i][j]) < 0.05 ? 0 : st.corrM[i][j], 1)}</span>`).join(""); });
+      h += `<div class="pf-sub" style="margin-top:12px">How they move together</div>
+        <div class="pf-hm" style="grid-template-columns:44px repeat(${n}, minmax(0, 1fr))">${g}</div>
+        <div class="sub pf-why">Correlation of daily moves: red = move together (less protection), blue = move opposite (more protection), pale = unrelated.</div>`;
+    }
+    // diversification
+    h += `<div class="pf-sub">Diversification</div>` +
+      pfRow("Diversification benefit", pfPct(1 - st.vol / st.avgVol, 0), `Mixing cut the swing from ${pfPct(st.avgVol, 0)} (the stocks' own average) to ${pfPct(st.vol, 0)}.`) +
+      pfRow("Average correlation", pfNum(st.avgC), "1 = all move in lockstep, 0 = unrelated, below 0 = opposite. Lower spreads risk better.") +
+      pfRow("Effective number of stocks", fmt(effN, 1), `${W.length} holdings behave like ${fmt(effN, 1)} equal ones. One big position pulls this down.`) +
+      pfRow("Largest holding", `${esc(shortSym(top.sym))} ${fmt(top.w * 100, 0)}%`, "Many funds cap one stock at 10 to 25%.");
+    // vs the market
+    h += `<div class="pf-sub">Versus the ${bname}</div>` +
+      pfRow("Alpha (yearly)", tone(st.alpha), `Return beyond what its beta would predict from the ${bname} moves. Positive = beat what its market risk explains (over this period only).`) +
+      pfRow("R-squared", pfNum(st.r2), `How much of the daily moves the ${bname} explains: near 1 = moves like the index, near 0 = its own path.`) +
+      pfRow("Tracking error", pfPct(st.te, 0), `How far it strays from the ${bname} in a year. Index funds are near 0%.`) +
+      pfRow("Information ratio", pfNum(st.ir), "Extra return per unit of straying from the index. Above 0.5 is considered good.") +
+      pfRow("Up / down capture", `${pfNum(st.upCap * 100, 0)}% / ${pfNum(st.dnCap * 100, 0)}%`, `On up days it captured ${pfNum(st.upCap * 100, 0)}% of the index gain; on down days ${pfNum(st.dnCap * 100, 0)}% of the fall. Ideal: high up, low down.`) +
+      pfRow("Sortino ratio", pfNum(st.sortino), "Like Sharpe but only counts downside swings. Higher is better.") +
+      pfRow("Calmar ratio", pfNum(st.calmar), "Return divided by the worst drop. Higher = more reward for the pain.");
+    if (st.H.length < W.length) h += `<div class="sub warn" style="margin-top:6px">Left out of the history numbers (too new): ${W.filter(x => !st.H.includes(x)).map(x => esc(shortSym(x.sym))).join(", ")}.</div>`;
+  } else {
+    h += `<div class="sub" style="margin-top:8px">Not enough shared price history yet for risk and performance numbers.</div>`;
+  }
+  h += `<div class="sub" style="margin-top:10px">Daily closes over the last year (Yahoo), refreshed hourly. Ratios use a 0% risk-free rate. Facts about the past, not a forecast or advice.</div>`;
+  if ($("bk-port") !== box) return;
+  $("pf-body").innerHTML = h;
+  // growth chart
+  if (st && typeof LightweightCharts !== "undefined") {
+    const el = $("pf-chart"); if (bkChart) { try { bkChart.remove(); } catch (_) {} bkChart = null; }
+    const t = (d) => `${String(d).slice(0, 4)}-${String(d).slice(4, 6)}-${String(d).slice(6, 8)}`;
+    const txt = cssVar("--muted", "#8a97a6"), line = cssVar("--line", "#2a3140");
+    bkChart = LightweightCharts.createChart(el, { width: el.clientWidth || 320, height: 170,
+      layout: { background: { color: "transparent" }, textColor: txt, fontSize: 10 },
+      grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
+      rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false },
+      handleScroll: false, handleScale: false, crosshair: { mode: 0 } });
+    const a = bkChart.addLineSeries({ color: cssVar("--accent", "#4c9aff"), lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: "Basket", priceFormat: { type: "price", precision: 0, minMove: 1 } });
+    const b = bkChart.addLineSeries({ color: "#8a97a6", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: true, title: bshort, priceFormat: { type: "price", precision: 0, minMove: 1 } });
+    a.setData(st.dates.map((d, i) => ({ time: t(d), value: Math.round(total * st.value[i]) })));
+    b.setData(st.dates.map((d, i) => ({ time: t(d), value: Math.round(total * st.bval[i]) })));
+    bkChart.timeScale().fitContent();
+  }
 }
 function bkPick() {
   const id = parseInt($("bk-sel").value, 10), b = bkList.find(x => x.id === id);
