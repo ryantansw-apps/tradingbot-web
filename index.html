@@ -58,6 +58,15 @@
     .bk-row input { width: 100%; box-sizing: border-box; text-align: right; }
     .bk-row .x { width: 24px; height: 24px; border-radius: 50%; background: var(--line); display: grid; place-items: center; font-size: 12px; cursor: pointer; }
     .bk-btns { display: flex; gap: 8px; margin-top: 10px; }
+    .bk-nav { display: grid; grid-template-columns: 56px 1fr 56px; gap: 8px; align-items: center; margin-top: 8px; text-align: center; font-size: 13px; }
+    .pf-pie { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 12px; align-items: center; margin-top: 8px; }
+    .pf-leg div { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 2px 0; }
+    .pf-leg i { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; display: block; }
+    .pf-leg b { margin-left: auto; font-variant-numeric: tabular-nums; }
+    .pf-m { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .pf-m:last-child { border-bottom: 0; }
+    .pf-m .t { display: flex; justify-content: space-between; gap: 8px; }
+    .pf-m .t b { white-space: nowrap; }
     .bk-btns button { flex: 1; }
     .ord-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
     .ord-row:last-child { border-bottom: 0; }
@@ -301,10 +310,16 @@
       <div><label for="bk-n">Stocks in an idea</label><select id="bk-n"><option>3</option><option>4</option><option selected>5</option><option>6</option><option>8</option></select></div>
       <div><label>&nbsp;</label><button id="bk-gen" style="width:100%">Generate idea</button></div>
     </div>
+    <div class="bk-nav" id="bk-nav" style="display:none">
+      <button class="ghost" id="bk-prev" aria-label="Previous idea">◀</button>
+      <div id="bk-pos"></div>
+      <button class="ghost" id="bk-next" aria-label="Next idea">▶</button>
+    </div>
     <div class="sub" id="bk-gen-note" style="margin-top:6px"></div>
     <div id="bk-rows" style="margin-top:8px"></div>
     <div class="bk-btns"><button class="ghost" id="bk-even">Split evenly</button><button class="ghost" id="bk-save">Save basket</button></div>
     <div id="bk-sum" style="margin-top:10px"></div>
+    <div id="bk-port" style="margin-top:12px"></div>
     <button id="bk-buy" style="width:100%;margin-top:10px">Buy basket</button>
     <button class="ghost" id="bk-del" style="width:100%;margin-top:8px">Delete this basket</button>
     <div class="sub" style="margin-top:8px">Each stock becomes its own limit order, good for today, priced a touch above the last price so it is more likely to fill. Shares are whole numbers, so a little cash is left over. Each order pays its own minimum fee, so very small amounts lose more to fees.</div>
@@ -1195,6 +1210,45 @@ ordSetSide("BUY"); ordSetKind("stock");
 // queues one ordinary tb_tiger_orders row per stock, so the worker checks
 // each order exactly as if it were placed by hand.
 let bkList = [], bkCur = { id: null, name: "", items: [] }, bkUni = {}, bkIdeaNo = 0;
+let bkIdeas = [], bkIdeaIdx = -1;   // generated ideas this session, for the back / forward buttons
+// Yahoo sector names -> the usual (GICS-style) names, plus a short form for basket names
+const SEC = {
+  "Technology": ["Technology", "Tech"], "Consumer Defensive": ["Consumer Staples", "Staples"],
+  "Consumer Cyclical": ["Consumer Discretionary", "Consumer"], "Financial Services": ["Financials", "Finance"],
+  "Communication Services": ["Communication Services", "Telecom"], "Healthcare": ["Health Care", "Health"],
+  "Real Estate": ["Real Estate", "Property"], "Industrials": ["Industrials", "Industrial"],
+  "Energy": ["Energy", "Energy"], "Utilities": ["Utilities", "Utility"], "Basic Materials": ["Materials", "Materials"],
+  "Index fund": ["Index fund", "Index"] };
+const secName = (x) => (SEC[x] || [x || "Other"])[0];
+const secShort = (x) => (SEC[x] || [x || "Other", x || "Other"])[1];
+const SEC_COL = { "Technology": "#2a78d6", "Consumer Staples": "#1baf7a", "Consumer Discretionary": "#eb6834",
+  "Financials": "#6250d6", "Communication Services": "#e87ba4", "Health Care": "#e34948", "Real Estate": "#eda100",
+  "Industrials": "#8a97a6", "Energy": "#b3541e", "Utilities": "#008300", "Materials": "#9085e9" };
+const secCol = (n) => SEC_COL[n] || "#5f6b7a";
+// a short descriptive name from the mix: market + tilt + risk style (beta)
+function bkAutoName(items, n) {
+  const w = {}; let tot = 0, bsum = 0, bw = 0;
+  items.forEach(it => { const u = bkUni[it.symbol], x = Number(it.weight) || 1; tot += x;
+    const k = u?.sector || bkData(it.symbol)?.sector; w[k] = (w[k] || 0) + x;
+    if (u && u.beta != null) { bsum += x * Number(u.beta); bw += x; } });
+  const top = Object.entries(w).sort((a, b) => b[1] - a[1])[0];
+  const tilt = top && top[1] / tot >= 0.4 ? `${secShort(top[0])}-Tilted` : "Diversified";
+  const beta = bw ? bsum / bw : null;
+  const style = beta == null ? "" : beta < 0.6 ? " Defensive" : beta < 0.9 ? " Steady" : beta < 1.2 ? " Core" : " Growth";
+  return `${mkt} ${tilt}${style} #${n}`.slice(0, 40);
+}
+function bkShowIdea(i) {
+  if (i < 0 || i >= bkIdeas.length) return;
+  if (bkIdeaIdx >= 0 && bkIdeas[bkIdeaIdx] && bkCur.idea === bkIdeaIdx) bkIdeas[bkIdeaIdx].items = bkCur.items.map(x => ({ ...x }));
+  bkIdeaIdx = i;
+  const it = bkIdeas[i];
+  bkCur = { id: null, name: it.name, items: it.items.map(x => ({ ...x })), idea: i };
+  $("bk-name").value = it.name; $("bk-gen-note").innerHTML = it.note;
+  $("bk-nav").style.display = bkIdeas.length > 1 ? "" : "none";
+  $("bk-pos").textContent = `Idea ${i + 1} of ${bkIdeas.length}`;
+  $("bk-prev").disabled = i === 0; $("bk-next").disabled = i === bkIdeas.length - 1;
+  bkRender();
+}
 // price/name/sector for a basket stock: research list first, else the most-traded list
 function bkData(sym) {
   const d = sgxCache.res[sym]?.data;
@@ -1205,7 +1259,7 @@ function bkData(sym) {
 const bkBig = (v) => v >= 1e9 ? fmt(v / 1e9, 1) + "b" : fmt(v / 1e6, 0) + "m";
 function bkGenerate() {
   const n = parseInt($("bk-n").value, 10), amt = parseFloat($("bk-amt").value) || 0, cur = bkCcy();
-  const ranked = Object.values(bkUni).filter(u => u.market === mkt && u.currency === cur && u.price > 0 && u.avg_value > 0)
+  const ranked = Object.values(bkUni).filter(u => u.in_pool !== false && u.market === mkt && u.currency === cur && u.price > 0 && u.avg_value > 0)
     .sort((a, b) => b.avg_value - a.avg_value);
   if (!ranked.length) return toast("Most-traded list not loaded yet. Try again in a moment.");
   const top = ranked.slice(0, 30);
@@ -1223,12 +1277,14 @@ function bkGenerate() {
   if (!picked.length) return toast(`No most-traded stock fits ${bkMoney()}${fmt(amt / n, 0)} per stock. Raise the amount or pick fewer stocks.`);
   picked.sort((a, b) => b.avg_value - a.avg_value);
   bkIdeaNo++;
-  bkCur = { id: null, name: `Idea ${bkIdeaNo}: most traded`, items: picked.map(u => ({ symbol: u.symbol, weight: 0 })) };
-  $("bk-name").value = bkCur.name;
-  $("bk-gen-note").innerHTML = `Picked at random from the 30 most traded ${mkt === "US" ? "US" : "SGX"} stocks (money traded per day, last 20 days), at most 2 per industry` +
-    (amt > 0 ? `, only stocks where 1 share fits ${bkMoney()}${fmt(amt / n, 0)}` : "") + `. Press Generate again for another mix. An idea from a rule, not advice.` +
+  const k = picked.length, base = Math.floor(100 / k);
+  const items = picked.map((u, i) => ({ symbol: u.symbol, weight: base + (i < 100 - base * k ? 1 : 0) }));
+  const note = `Picked at random from the 30 most traded ${mkt === "US" ? "US" : "SGX"} stocks (money traded per day, last 20 days), at most 2 per industry` +
+    (amt > 0 ? `, only stocks where 1 share fits ${bkMoney()}${fmt(amt / n, 0)}` : "") + `. Press Generate again for another mix; ◀ ▶ flips between your ideas. An idea from a rule, not advice.` +
     (picked.length < n ? ` <span class="warn">Only ${picked.length} fit: raise the amount or pick fewer stocks.</span>` : "");
-  bkEven();
+  bkIdeas = bkIdeas.filter(x => x.market === mkt);
+  bkIdeas.push({ name: bkAutoName(items, bkIdeaNo), items, note, market: mkt });
+  bkShowIdea(bkIdeas.length - 1);
 }
 const bkMoney = () => mkt === "US" ? "US$" : "S$";
 const bkCcy = () => mkt === "US" ? "USD" : "SGD";
@@ -1238,7 +1294,8 @@ function bkStocks() {
   return sgxCache.wl.filter(r => r.enabled && inMkt(r) && sgxCache.res[r.symbol]?.data?.price && sgxCache.res[r.symbol].data.currency === bkCcy());
 }
 async function bkLoad() {
-  const [b, u] = await Promise.all([sb.from("tb_baskets").select("*").order("name"), sb.from("tb_universe").select("*")]);
+  const [b, u] = await Promise.all([sb.from("tb_baskets").select("*").order("name"),
+    sb.from("tb_universe").select("symbol,market,name,sector,currency,price,avg_value,in_pool,beta,vol,ret_1y")]);
   if (!b.error) bkList = b.data || [];
   if (!u.error) { bkUni = {}; (u.data || []).forEach(r => { r.price = Number(r.price); r.avg_value = Number(r.avg_value); bkUni[r.symbol] = r; }); }
   bkRender();
@@ -1264,7 +1321,7 @@ function bkRender() {
   const plan = bkPlan();
   $("bk-rows").innerHTML = plan.map((r, i) => `<div class="bk-row">
       <div><b>${esc(r.d ? r.d.name : r.symbol)}</b> <span class="sub">${esc(shortSym(r.symbol))}</span>
-        <div class="sub bk-info">${r.d ? `${r.q} shares × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(r.d.sector || "")}` : "No price yet"}</div>${bkUni[r.symbol] ? `<div class="sub">Trades about ${bkMoney()}${bkBig(bkUni[r.symbol].avg_value)} a day</div>` : ""}</div>
+        <div class="sub bk-info">${r.d ? `${r.q} share${r.q === 1 ? "" : "s"} × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(secName(r.d.sector))}` : "No price yet"}</div>${bkUni[r.symbol] ? `<div class="sub">Trades about ${bkMoney()}${bkBig(bkUni[r.symbol].avg_value)} a day</div>` : ""}</div>
       <input type="number" min="0" max="100" step="1" inputmode="numeric" value="${r.w}" data-bkw="${i}" aria-label="Weight % for ${esc(r.symbol)}">
       <span class="x" data-bkx="${i}" aria-label="Remove">✕</span></div>`).join("")
     || `<div class="empty">No stocks yet. Use "Add a stock" above.</div>`;
@@ -1276,7 +1333,7 @@ function bkRender() {
 function bkRowText() {
   bkPlan().forEach((r, i) => {
     const sub = document.querySelectorAll("#bk-rows .bk-row")[i]?.querySelector(".bk-info");
-    if (sub && r.d) sub.textContent = `${r.q} shares × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${r.d.sector || ""}`;
+    if (sub && r.d) sub.textContent = `${r.q} share${r.q === 1 ? "" : "s"} × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${secName(r.d.sector)}`;
   });
 }
 function bkSum() {
@@ -1284,7 +1341,7 @@ function bkSum() {
   if (!plan.length) { $("bk-sum").innerHTML = ""; return; }
   const wsum = plan.reduce((a, r) => a + r.w, 0), spent = plan.reduce((a, r) => a + r.v, 0);
   const fees = plan.filter(r => r.q > 0).reduce((a, r) => a + ordFees(r.v, r.q, mkt === "US"), 0);
-  const sectors = {}; plan.forEach(r => { const k = r.d?.sector || "Unknown"; sectors[k] = (sectors[k] || 0) + r.w; });
+  const sectors = {}; plan.forEach(r => { const k = secName(r.d?.sector); sectors[k] = (sectors[k] || 0) + r.w; });
   const topSec = Object.entries(sectors).sort((a, b) => b[1] - a[1])[0];
   const topStock = plan.slice().sort((a, b) => b.w - a.w)[0];
   const warn = [];
@@ -1302,11 +1359,101 @@ function bkSum() {
     row("Biggest industry", `${esc(topSec[0])} ${fmt(topSec[1], 0)}%`) +
     row("Biggest single stock", `${esc(shortSym(topStock.symbol))} ${fmt(topStock.w, 0)}%`) +
     (warn.length ? `<div class="sub warn" style="margin-top:6px">${warn.map(esc).join("<br>")}</div>` : "");
+  bkPortSoon();
+}
+
+// ---- Portfolio check: sector pie + risk numbers from 1 year of daily closes
+// (tb_universe.hist). Weights = money actually bought (whole shares).
+const bkHist = {};
+let bkPortT = null;
+function bkPortSoon() { clearTimeout(bkPortT); bkPortT = setTimeout(bkPort, 250); }
+const pfPct = (x, d = 1) => x == null || !isFinite(x) ? "—" : `${x >= 0 ? "" : "-"}${fmt(Math.abs(x) * 100, d)}%`;
+function stdev(a) { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / (a.length - 1)); }
+function corr(a, b) {
+  const n = a.length, ma = a.reduce((x, y) => x + y, 0) / n, mb = b.reduce((x, y) => x + y, 0) / n;
+  let c = 0, va = 0, vb = 0;
+  for (let i = 0; i < n; i++) { c += (a[i] - ma) * (b[i] - mb); va += (a[i] - ma) ** 2; vb += (b[i] - mb) ** 2; }
+  return va && vb ? c / Math.sqrt(va * vb) : null;
+}
+function maxDD(vals) { let peak = vals[0], dd = 0; vals.forEach(v => { peak = Math.max(peak, v); dd = Math.min(dd, v / peak - 1); }); return dd; }
+function bkPie(parts) {
+  const R = 52, C = 2 * Math.PI * R; let off = 0;
+  const segs = parts.map(([name, w]) => { const len = w * C;
+    const seg = `<circle r="${R}" cx="66" cy="66" fill="none" stroke="${secCol(name)}" stroke-width="22" stroke-dasharray="${Math.max(len - 1.5, 0.5)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 66 66)"><title>${esc(name)} ${fmt(w * 100, 0)}%</title></circle>`;
+    off += len; return seg; }).join("");
+  return `<svg viewBox="0 0 132 132" width="132" height="132" role="img" aria-label="Industry mix pie chart">${segs}
+    <text x="66" y="62" text-anchor="middle" font-size="11" fill="var(--muted, #8a97a6)">Industries</text>
+    <text x="66" y="80" text-anchor="middle" font-size="18" font-weight="700" fill="var(--text)">${parts.length}</text></svg>`;
+}
+async function bkPort() {
+  const box = $("bk-port"); if (!box) return;
+  const plan = bkPlan().filter(r => r.d && r.v > 0);
+  if (!plan.length) { box.innerHTML = ""; return; }
+  const total = plan.reduce((a, r) => a + r.v, 0);
+  const W = plan.map(r => ({ sym: r.symbol, w: r.v / total, sector: secName(r.d.sector) }));
+  // sector pie
+  const secs = {}; W.forEach(x => secs[x.sector] = (secs[x.sector] || 0) + x.w);
+  const parts = Object.entries(secs).sort((a, b) => b[1] - a[1]);
+  const leg = parts.map(([n, w]) => `<div><i style="background:${secCol(n)}"></i><span>${esc(n)}</span><b>${fmt(w * 100, 0)}%</b></div>`).join("");
+  const bench = mkt === "US" ? "SPY" : "ES3.SI", bname = mkt === "US" ? "S&amp;P 500 (SPY)" : "STI (ES3)";
+  box.innerHTML = `<div class="sec">Portfolio check</div><div class="pf-pie">${bkPie(parts)}<div class="pf-leg">${leg}</div></div>
+    <div class="sub" style="margin-top:4px">Share of your money in each industry.</div><div id="bk-risk"><div class="empty">Working out risk…</div></div>`;
+  // history for basket stocks + benchmark (cached per session)
+  const need = [...W.map(x => x.sym), bench].filter(sy => !(sy in bkHist));
+  if (need.length) {
+    const { data, error } = await sb.from("tb_universe").select("symbol,hist").in("symbol", need);
+    if (error) { $("bk-risk").innerHTML = `<div class="empty">Could not load price history.</div>`; return; }
+    need.forEach(sy => bkHist[sy] = null);
+    (data || []).forEach(r => bkHist[r.symbol] = r.hist || null);
+  }
+  if ($("bk-port") !== box) return;
+  const m = (t, v, why) => `<div class="pf-m"><div class="t"><span>${t}</span><b>${v}</b></div><div class="sub">${why}</div></div>`;
+  const out = [];
+  // beta: weighted average of each stock's beta
+  let bsum = 0, bw = 0; W.forEach(x => { const b = bkUni[x.sym]?.beta; if (b != null) { bsum += x.w * Number(b); bw += x.w; } });
+  const beta = bw ? bsum / bw : null;
+  out.push(m(`Beta vs ${bname}`, beta == null ? "—" : fmt(beta, 2),
+    beta == null ? "Not enough price history yet." : `If the market moves 1%, this basket has tended to move about ${fmt(Math.abs(beta), 2)}%${beta < 0 ? " the opposite way" : ""}. Below 1 = calmer than the market, above 1 = bumpier.` +
+    (bw < 0.999 ? ` Covers ${fmt(bw * 100, 0)}% of the money (some stocks are too new).` : "")));
+  const effN = 1 / W.reduce((a, x) => a + x.w * x.w, 0);
+  out.push(m("Effective number of stocks", fmt(effN, 1), `How spread out the money really is. ${W.length} stocks in equal amounts = ${W.length}; one big holding pulls it down.`));
+  // risk from aligned daily returns
+  const H = W.filter(x => Array.isArray(bkHist[x.sym]) && bkHist[x.sym].length >= 60);
+  const bh = bkHist[bench];
+  let dates = null;
+  [...H.map(x => bkHist[x.sym]), ...(bh ? [bh] : [])].forEach(h => { const set = new Set(h.map(p => p[0])); dates = dates ? dates.filter(d => set.has(d)) : h.map(p => p[0]); });
+  if (H.length && dates && dates.length >= 60) {
+    const px = (h) => { const mp = new Map(h); return dates.map(d => mp.get(d)); };
+    const P = H.map(x => px(bkHist[x.sym])), wsum = H.reduce((a, x) => a + x.w, 0), w = H.map(x => x.w / wsum);
+    const R = P.map(p => p.slice(1).map((v, i) => v / p[i] - 1));
+    const port = R[0].map((_, t) => R.reduce((a, r, i) => a + w[i] * r[t], 0));
+    const vol = stdev(port) * Math.sqrt(252), vols = R.map(r => stdev(r) * Math.sqrt(252));
+    const avgVol = vols.reduce((a, v, i) => a + w[i] * v, 0);
+    const value = dates.map((_, t) => P.reduce((a, p, i) => a + w[i] * p[t] / p[0], 0));
+    const ret = value[value.length - 1] - 1, dd = maxDD(value);
+    const sharpe = (port.reduce((a, x) => a + x, 0) / port.length) * 252 / vol;
+    let cs = 0, cn = 0; for (let i = 0; i < R.length; i++) for (let j = i + 1; j < R.length; j++) { const c = corr(R[i], R[j]); if (c != null) { cs += c; cn++; } }
+    const avgC = cn ? cs / cn : null;
+    let bRet = null, bVol = null, bDD = null;
+    if (bh) { const bp = px(bh), br = bp.slice(1).map((v, i) => v / bp[i] - 1); bRet = bp[bp.length - 1] / bp[0] - 1; bVol = stdev(br) * Math.sqrt(252); bDD = maxDD(bp.map(v => v / bp[0])); }
+    const yrs = (dates.length - 1) / 252;
+    out.push(m("Expected yearly swing (volatility)", pfPct(vol, 0), `A typical year moves within about ±${fmt(vol * 100, 0)}% of the average. ${bname}: ${pfPct(bVol, 0)}.`));
+    out.push(m("Diversification benefit", pfPct(1 - vol / avgVol, 0), `Mixing these stocks cut the swing from ${pfPct(avgVol, 0)} (their average) to ${pfPct(vol, 0)}, because they do not all move together.`));
+    if (avgC != null) out.push(m("Average correlation", fmt(avgC, 2), `How alike the stocks move: 1 = in lockstep, 0 = unrelated, below 0 = opposite. Lower spreads risk better.`));
+    out.push(m(`Last ${yrs > 0.95 ? "1 year" : fmt(yrs * 12, 0) + " months"} if held`, `<span class="${ret >= 0 ? "up" : "down"}">${pfPct(ret, 1)}</span>`, `Same mix bought ${yrs > 0.95 ? "a year" : "that long"} ago and held. ${bname}: ${pfPct(bRet, 1)}. Past results do not predict the future.`));
+    out.push(m("Worst drop along the way", `<span class="down">${pfPct(dd, 1)}</span>`, `Biggest fall from a high point to a later low in that period. ${bname}: ${pfPct(bDD, 1)}.`));
+    out.push(m("Sharpe ratio (risk-free 0%)", fmt(sharpe, 2), `Return per unit of swing over the period. Higher is better; around 1 is good, below 0 means it lost money.`));
+    if (H.length < W.length) out.push(`<div class="sub warn" style="margin-top:6px">Left out of the risk numbers (too little history): ${W.filter(x => !H.includes(x)).map(x => esc(shortSym(x.sym))).join(", ")}.</div>`);
+  } else {
+    out.push(`<div class="sub" style="margin-top:6px">Not enough shared price history yet for swing, correlation and past returns.</div>`);
+  }
+  out.push(`<div class="sub" style="margin-top:6px">From daily closing prices over the last year (Yahoo), refreshed hourly. Facts about the past, not advice.</div>`);
+  if ($("bk-port") === box) $("bk-risk").innerHTML = out.join("");
 }
 function bkPick() {
   const id = parseInt($("bk-sel").value, 10), b = bkList.find(x => x.id === id);
   bkCur = b ? { id: b.id, name: b.name, items: (b.items || []).map(x => ({ ...x })) } : { id: null, name: "", items: [] };
-  $("bk-name").value = bkCur.name; $("bk-gen-note").textContent = ""; bkRender();
+  $("bk-name").value = bkCur.name; $("bk-gen-note").textContent = ""; $("bk-nav").style.display = "none"; bkRender();
 }
 function bkAdd() {
   const sym = $("bk-add").value; if (!sym) return;
@@ -1351,7 +1498,8 @@ async function bkBuy() {
   if (error) return toast("Not queued: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   toast(`${rows.length} orders queued: the laptop sends them within about 10 s`); loadOrders();
 }
-$("bk-sel").onchange = bkPick; $("bk-gen").onclick = bkGenerate; $("bk-add").onchange = bkAdd; $("bk-even").onclick = bkEven;
+$("bk-sel").onchange = bkPick; $("bk-gen").onclick = bkGenerate;
+$("bk-prev").onclick = () => bkShowIdea(bkIdeaIdx - 1); $("bk-next").onclick = () => bkShowIdea(bkIdeaIdx + 1); $("bk-add").onchange = bkAdd; $("bk-even").onclick = bkEven;
 $("bk-save").onclick = bkSave; $("bk-del").onclick = bkDelete; $("bk-buy").onclick = bkBuy;
 $("bk-amt").oninput = () => { bkSum(); bkRowText(); };
 bkLoad();
