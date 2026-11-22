@@ -408,10 +408,15 @@
   </div>
 
   <div class="card" data-tab="sg">
-    <h2 data-card="holdings">My holdings (Tiger) <span><span class="demo-tag">PRACTICE</span> <span class="chev">▾</span></span></h2>
+    <h2 data-card="holdings">All holdings <span><span class="chev">▾</span></span></h2>
     <div class="cbody">
-    <div class="sub">What the Tiger practice account holds right now, read from Tiger about once a minute. After a basket order, this is where you see which stocks were really bought.</div>
+    <div class="sub">Every position this app can see, in one place. After a basket order, this is where you see which stocks were really bought.</div>
+    <div class="sec" style="margin-top:12px">Tiger practice account <span class="demo-tag">PRACTICE</span></div>
     <div id="hold-body" style="margin-top:8px"><div class="empty">Loading…</div></div>
+    <div class="sec" style="margin-top:16px">Alpaca bot (automatic, paper money)</div>
+    <div id="hold-alpaca" style="margin-top:8px"><div class="empty">Loading…</div></div>
+    <div class="sec" style="margin-top:16px">Tiger real account (Prime)</div>
+    <div class="sub" style="margin-top:6px">Not connected yet. Tiger has to link Prime to this app first. Until then your real positions are only in the Tiger app.</div>
     </div>
   </div>
 
@@ -559,7 +564,22 @@ function renderStatus(s, positions) {
 
 const STRATEGY_LABEL = { breakout: "breakout", rsi2: "RSI2 dip", ibs: "IBS overnight" };
 const stratLabel = s => STRATEGY_LABEL[s || "breakout"] || esc(s);
+// the Alpaca bot's open positions again, on the All holdings card (same rows as Alpaca bot > Trades)
+function holdAlpaca(rows) {
+  const box = $("hold-alpaca"); if (!box) return;
+  const m = (v, d = 2) => (v < 0 ? "-" : "") + "US$" + fmt(Math.abs(v), d);
+  const pl = rows.reduce((a, p) => a + Number(p.unrealized_pl || 0), 0);
+  box.innerHTML = rows.length ? rows.map(p => {
+    const q = Number(p.qty), cost = Math.abs(q) * Number(p.avg_entry_price), g = Number(p.unrealized_pl || 0);
+    return `<div class="ord-row"><div style="min-width:0"><b>${esc(p.symbol)}</b> <span class="sub">${stratLabel(p.strategy)}</span>
+        <div class="sub">${fmt(Math.abs(q), 0)} share${Math.abs(q) === 1 ? "" : "s"}${q < 0 ? " sold short" : ""} · entry US$${fmt(p.avg_entry_price)} · now US$${fmt(p.current_price)}</div></div>
+      <div style="text-align:right;white-space:nowrap"><b>${m(Math.abs(q) * Number(p.current_price))}</b>
+        <div class="sub ${cls(g)}">${g >= 0 ? "+" : ""}${m(g)}${cost ? ` (${signed(g / cost * 100, 1, true)})` : ""}</div></div></div>`;
+  }).join("") + `<div class="ord-row"><span>Gain or loss on open positions</span><b class="${cls(pl)}">${pl >= 0 ? "+" : ""}${m(pl)}</b></div>`
+    : `<div class="empty">The bot holds nothing right now. It trades by itself during US market hours.</div>`;
+}
 function renderPositions(rows) {
+  holdAlpaca(rows);
   $("pos-count").textContent = rows.length;
   if (!rows.length) { $("positions").innerHTML = `<div class="empty">none open</div>`; return; }
   $("positions").innerHTML = `<table><tr><th>Sym</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">Now</th><th class="r">P&amp;L</th><th></th></tr>` +
@@ -1350,7 +1370,7 @@ function holdRender(row) {
   const mk = [["SG", "SGD", "Singapore"], ["US", "USD", "US"]].filter(([, c]) => by[c] && by[c].n);
   if (mk.length) h += mk.map(([m, c, lab]) => `<button class="ghost" style="width:100%;margin-top:10px" onclick="holdCheck('${m}','${c}')">Check my ${lab} holdings as a basket</button>`).join("") +
     `<div class="sub" style="margin-top:6px">Opens them in Baskets with the pie charts, beta and risk numbers. Nothing is bought.</div>`;
-  h += `<div class="sub" style="margin-top:10px">Read from Tiger ${ago(row.updated_at)}. Practice account (fake money). Your real Prime holdings appear here once Tiger links Prime to this app.</div>`;
+  h += `<div class="sub" style="margin-top:10px">Read from Tiger ${ago(row.updated_at)}, about once a minute. Fake money.</div>`;
   return h;
 }
 // open the stock holdings of one market in the Baskets builder as an idea (weights = share of the money), nothing is ordered
