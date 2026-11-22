@@ -407,6 +407,14 @@
     </div>
   </div>
 
+  <div class="card" data-tab="sg">
+    <h2 data-card="holdings">My holdings (Tiger) <span><span class="demo-tag">PRACTICE</span> <span class="chev">▾</span></span></h2>
+    <div class="cbody">
+    <div class="sub">What the Tiger practice account holds right now, read from Tiger about once a minute. After a basket order, this is where you see which stocks were really bought.</div>
+    <div id="hold-body" style="margin-top:8px"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
   <div class="card">
     <h2 data-card="controls">Controls <span class="chev">▾</span></h2>
     <div class="cbody"><div class="ctl">
@@ -1288,6 +1296,78 @@ async function ordReview() {
   const { error } = await sb.from("tb_tiger_orders").insert({ symbol: sgxSel, side: ordSide, qty: q, limit_price: px, currency: ordCur(d), mode: ORD_MODE });
   if (error) return toast("Order not queued: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   toast("Order queued: the laptop sends it within about 10 s"); loadOrders();
+}
+// ---- Holdings: the Tiger account snapshot the laptop publishes about once a
+// minute (scripts/tiger_orders.py). Private: the row is readable only with the
+// operator passcode. Stock values use the dashboard's own last price when it
+// has one, so they match the Order and Baskets screens.
+let holdHtml = "", holdRow = null;
+const holdCur = (c) => c === "USD" ? "US$" : c === "SGD" ? "S$" : (c || "") + " ";
+function holdCalc(p) {
+  if (p.kind !== "STK") return { ...p, px: p.last, val: p.value, gain: p.pnl };
+  const mine = bkData(p.symbol), px = mine && mine.price ? Number(mine.price) : p.last;
+  return { ...p, name: mine && mine.name, px, val: px != null ? p.qty * px : p.value, gain: px != null && p.avg_cost != null ? p.qty * (px - p.avg_cost) : p.pnl };
+}
+async function loadHoldings() {
+  const box = $("hold-body"); if (!box || document.body.dataset.tab !== "sg") return;
+  let h;
+  if (!getPass()) h = `<div class="empty">Holdings are private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode.</div>`;
+  else {
+    const { data, error } = await sb.from("tb_tiger_holdings").select("*").eq("mode", ORD_MODE);
+    holdRow = error ? null : (data || [])[0] || null;
+    h = error ? `<div class="empty">Could not load holdings.</div>`
+      : !holdRow ? `<div class="empty">No holdings data yet. Check the passcode, and that the laptop is on.</div>` : holdRender(holdRow);
+  }
+  if (h !== holdHtml) { holdHtml = h; box.innerHTML = h; }
+}
+function holdRender(row) {
+  const d = row.data || {}, P = (d.positions || []).map(holdCalc), base = holdCur(d.currency);
+  const mins = (Date.now() - new Date(row.updated_at)) / 60000;
+  const by = {};   // per currency: money in positions and gain so far
+  P.forEach(p => { const k = p.currency || "?"; by[k] = by[k] || { val: 0, gain: 0, stk: 0, n: 0 };
+    by[k].val += p.val || 0; by[k].gain += p.gain || 0; if (p.kind === "STK") { by[k].n++; by[k].stk += p.val || 0; } });
+  const curs = Object.keys(by).sort();
+  const st = (k, v, sub) => `<div class="stat"><div class="k">${k}</div><div class="v small">${v}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  const cash = Object.entries(d.cash_by_ccy || {}).map(([c, v]) => `${holdCur(c)}${fmt(v, 0)}`).join(" · ") || (d.cash == null ? "—" : base + fmt(d.cash, 0));
+  let h = `<div class="mini" style="grid-template-columns:repeat(2,1fr)">` +
+    st("Account value", d.net_liq == null ? "—" : base + fmt(d.net_liq, 0), "cash plus holdings, from Tiger") +
+    st("Cash", cash, "not invested") +
+    st("In stocks and options", curs.map(c => `${by[c].val < 0 ? "-" : ""}${holdCur(c)}${fmt(Math.abs(by[c].val), 0)}`).join(" · ") || "Nothing yet", P.length ? `${P.length} holding${P.length === 1 ? "" : "s"}` : "") +
+    st("Gain or loss so far", curs.map(c => `<span class="${cls(by[c].gain)}">${by[c].gain >= 0 ? "+" : "-"}${holdCur(c)}${fmt(Math.abs(by[c].gain), 0)}</span>`).join(" · ") || "—", "against what you paid, not yet sold") + `</div>`;
+  if (mins > 5) h += `<div class="sub warn" style="margin-top:8px">Last read from Tiger ${ago(row.updated_at)}. The laptop may be off or asleep.</div>`;
+  h += P.length ? `<div class="sec" style="margin-top:12px">Holdings</div>` + P.slice().sort((a, b) => (b.val || 0) - (a.val || 0)).map(p => {
+    const c = holdCur(p.currency), dp = p.px != null && p.px < 1 ? 3 : 2, opt = p.kind === "OPT";
+    const o = p.opt || {}, exp = String(o.expiry || "").replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
+    const title = opt ? `${esc(p.symbol)} ${o.right === "PUT" ? "put" : "call"} ${fmt(o.strike, 2)}, expires ${esc(exp)}` : `${esc(p.name || p.symbol)} <span class="sub">${esc(shortSym(p.symbol))}</span>`;
+    const n = Math.abs(p.qty), what = opt ? `${n} contract${n === 1 ? "" : "s"}` : `${fmt(p.qty, 0)} share${n === 1 ? "" : "s"}`;
+    const pc = p.gain != null && p.val != null && p.val - p.gain ? p.gain / Math.abs(p.val - p.gain) : null;
+    const share = !opt && by[p.currency] && by[p.currency].stk ? ` · ${fmt(p.val / by[p.currency].stk * 100, 0)}% of your ${c} stocks` : "";
+    return `<div class="ord-row"><div style="min-width:0"><b>${title}</b>
+        <div class="sub">${what} · ${p.qty < 0 ? "sold at" : "paid"} ${p.avg_cost == null ? "—" : c + fmt(p.avg_cost, dp)} · now ${p.px == null ? "—" : c + fmt(p.px, dp)}${share}</div></div>
+      <div style="text-align:right;white-space:nowrap"><b>${p.val == null ? "—" : (p.val < 0 ? "-" : "") + c + fmt(Math.abs(p.val), 2)}</b>
+        <div class="sub ${cls(p.gain)}">${p.gain == null ? "" : `${p.gain >= 0 ? "+" : "-"}${c}${fmt(Math.abs(p.gain), 2)}${pc == null ? "" : ` (${signed(pc * 100, 1, true)})`}`}</div></div></div>`;
+  }).join("") : `<div class="empty">Nothing held in the practice account yet. A filled order shows up here within about a minute.</div>`;
+  const mk = [["SG", "SGD", "Singapore"], ["US", "USD", "US"]].filter(([, c]) => by[c] && by[c].n);
+  if (mk.length) h += mk.map(([m, c, lab]) => `<button class="ghost" style="width:100%;margin-top:10px" onclick="holdCheck('${m}','${c}')">Check my ${lab} holdings as a basket</button>`).join("") +
+    `<div class="sub" style="margin-top:6px">Opens them in Baskets with the pie charts, beta and risk numbers. Nothing is bought.</div>`;
+  h += `<div class="sub" style="margin-top:10px">Read from Tiger ${ago(row.updated_at)}. Practice account (fake money). Your real Prime holdings appear here once Tiger links Prime to this app.</div>`;
+  return h;
+}
+// open the stock holdings of one market in the Baskets builder as an idea (weights = share of the money), nothing is ordered
+function holdCheck(m, ccy) {
+  if (!holdRow) return;
+  const P = (holdRow.data.positions || []).map(holdCalc).filter(p => p.kind === "STK" && p.currency === ccy && p.qty > 0 && p.val > 0);
+  if (!P.length) return;
+  const total = P.reduce((a, p) => a + p.val, 0), ex = P.map(p => p.val / total * 100), w = ex.map(x => Math.max(1, Math.floor(x)));
+  let left = 100 - w.reduce((a, x) => a + x, 0);
+  ex.map((x, i) => [x - Math.floor(x), i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { w[i]++; left--; } });
+  if (mkt !== m) setMkt(m);
+  const list = bkIdeasOf(), name = "My Tiger holdings";
+  const idea = { name, items: P.map((p, i) => ({ symbol: p.symbol, weight: w[i] })), note: "Your practice-account holdings, weighted by the money in each. Shown for checking only." };
+  const at = list.findIndex(x => x.name === name);
+  if (at >= 0) list[at] = idea; else list.push(idea);
+  $("bk-amt").value = Math.round(total);
+  setSec("Baskets"); bkShowIdea(at >= 0 ? at : list.length - 1);
 }
 const ORD_ST = { queued: ["Waiting for laptop", ""], sending: ["Sending", ""], working: ["Open at Tiger", ""],
   "partially filled": ["Part filled", "up"], filled: ["Filled", "up"], cancelled: ["Cancelled", ""],
@@ -2271,7 +2351,7 @@ const tabKey = "tb_tab";
 // Section tabs: one group of cards at a time instead of one long scroll.
 const SECTIONS = {
   us: [["Overview", ["pnl", "perf", "uschart"]], ["Trades", ["positions", "signals", "trades"]], ["Watchlist", ["watchlist"]], ["Controls", ["controls"]]],
-  sg: [["Market", ["market"]], ["Research", ["sgx"]], ["Compare", ["sgxcmp"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]]],
+  sg: [["Market", ["market"]], ["Research", ["sgx"]], ["Compare", ["sgxcmp"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Holdings", ["holdings"]]],
 };
 const secKey = (t) => "tb_sec_" + t;
 const curSec = (t) => { const d = SECTIONS[t][0][0]; try { const v = localStorage.getItem(secKey(t)); return SECTIONS[t].some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
@@ -2304,7 +2384,7 @@ setMkt(mkt);
 setTab((() => { try { return localStorage.getItem(tabKey); } catch (_) { return null; } })() === "sg" ? "sg" : "us");
 
 wireCollapse();
-const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); loadMarket(); };
+const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); loadMarket(); loadHoldings(); };
 refreshAll(); setInterval(refreshAll, 15000);
 
 // ---- self-update ----------------------------------------------------------
