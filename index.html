@@ -890,7 +890,10 @@ async function loadSgx() {
   ]);
   if (wl.error || res.error) { $("sgx-detail").innerHTML = `<div class="empty">Could not load research data.</div>`; return; }
   const sig = JSON.stringify([wl.data, (res.data || []).map(r => r.updated_at), sgxSel]);
-  if (sig === sgxCache.sig) return;          // nothing changed: keep the scroll position
+  if (sig === sgxCache.sig) {                // nothing changed: keep the scroll position and what was typed,
+    (res.data || []).forEach(r => { const c = sgxCache.res[r.symbol]; if (c) c.data = r.data; });   // but take the 5-minute prices
+    ordLine(); return;
+  }
   sgxCache = { wl: wl.data || [], res: Object.fromEntries((res.data || []).map(r => [r.symbol, r])), sig };
   const live = sgxCache.wl.filter(r => r.enabled && inMkt(r));
   if (!sgxSel || !live.some(r => r.symbol === sgxSel)) sgxSel = live[0]?.symbol || "";
@@ -1090,9 +1093,16 @@ let ordSide = "BUY", ordFor = "", ordKind = "stock";
 const ORD_MODE = "demo";
 function ordData() { return sgxCache.res[sgxSel]?.data || null; }
 function ordCur(d) { return d && d.currency === "USD" ? "USD" : "SGD"; }
+// when the laptop last read a price from Yahoo (every 5 minutes in market hours); adds the day when it is not today
+const pxWhen = (iso) => { if (!iso) return ""; const t = new Date(iso), today = t.toDateString() === new Date().toDateString();
+  return (today ? "" : t.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) + ", ") + t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); };
+function ordLine() {
+  const d = ordData();
+  $("ord-stock").textContent = d ? `${d.name} (${sgxSel.replace(".SI", "")}) · last ${d.currency === "USD" ? "US$" : "S$"}${fmt(d.price, 2)}${d.price_at ? ` · read ${pxWhen(d.price_at)}` : ""}` : "Select a stock in Research";
+}
 function ordStock() {
   const d = ordData();
-  $("ord-stock").textContent = d ? `${d.name} (${sgxSel.replace(".SI", "")}) · last ${d.currency === "USD" ? "US$" : "S$"}${fmt(d.price, 2)}` : "Select a stock in Research";
+  ordLine();
   if (d && ordFor !== sgxSel) { ordFor = sgxSel; $("ord-px").value = Number(d.price).toFixed(d.price < 1 ? 3 : 2); ccFill(); }
   // covered calls: US stocks only (SGX has no listed options)
   $("ord-kind").style.display = d && ordUs() ? "" : "none";
@@ -1622,11 +1632,21 @@ function bkStocks() {
 }
 async function bkLoad() {
   const [b, u] = await Promise.all([sb.from("tb_baskets").select("*").order("name"),
-    sb.from("tb_universe").select("symbol,market,name,sector,currency,price,avg_value,in_pool,beta,vol,ret_1y,mom,pe_fwd,div_yield,mcap")]);
+    sb.from("tb_universe").select("symbol,market,name,sector,currency,price,avg_value,in_pool,beta,vol,ret_1y,mom,pe_fwd,div_yield,mcap,price_at")]);
   if (!b.error) bkList = b.data || [];
   if (!u.error) { bkUni = {}; (u.data || []).forEach(r => { r.price = Number(r.price); r.avg_value = Number(r.avg_value); bkUni[r.symbol] = r; }); }
   bkRender(); renderCmp();   // ranking by beta uses the universe numbers once they arrive
 }
+// every minute on the Tiger tab: pick up the laptop's 5-minute prices without redrawing the rows
+async function bkPrices() {
+  if (document.hidden || document.body.dataset.tab !== "sg" || !Object.keys(bkUni).length) return;
+  const { data, error } = await sb.from("tb_universe").select("symbol,price,price_at");
+  if (error) return;
+  let changed = false;
+  (data || []).forEach(r => { const u = bkUni[r.symbol]; if (u && u.price_at !== r.price_at) { u.price = Number(r.price); u.price_at = r.price_at; changed = true; } });
+  if (changed && $("bk-rows")) { bkRowText(); bkSum(); }
+}
+setInterval(bkPrices, 60000);
 function bkPlan() {
   const amt = parseFloat($("bk-amt").value) || 0;
   return bkCur.items.map(it => {
@@ -1685,6 +1705,8 @@ function bkSum() {
   if (zero.length) warn.push(`Amount too small to buy even 1 share of ${zero.map(r => shortSym(r.symbol)).join(", ")}.`);
   if (spent > 0 && fees / spent > 0.02) warn.push(`Fees are about ${(fees / spent * 100).toFixed(1)}% of the money. Fewer stocks or a bigger amount lowers this.`);
   const row = (a, b) => `<div class="ord-row"><span>${a}</span><b>${b}</b></div>`;
+  // oldest price time among the basket's stocks
+  const pxOld = plan.map(r => bkUni[r.symbol]?.price_at).filter(Boolean).sort()[0];
   // basket dividend yield: each stock's yield weighted by the money bought
   let dyV = 0, dyW = 0; plan.forEach(r => { const y = bkUni[r.symbol]?.div_yield; if (y != null && r.v > 0) { dyV += r.v * Number(y); dyW += r.v; } });
   const dy = dyW ? dyV / dyW : null;
@@ -1697,6 +1719,7 @@ function bkSum() {
     row("Industries", `${Object.keys(sectors).length}`) +
     row("Biggest industry", `${esc(topSec[0])} ${fmt(topSec[1], 0)}%`) +
     row("Biggest single stock", `${esc(shortSym(topStock.symbol))} ${fmt(topStock.w, 0)}%`) +
+    (pxOld ? row("Prices read", esc(pxWhen(pxOld))) : "") +
     (warn.length ? `<div class="sub warn" style="margin-top:6px">${warn.map(esc).join("<br>")}</div>` : "");
   bkPortSoon();
 }
@@ -2250,7 +2273,7 @@ function applySec() {
 }
 function setTab(t) {
   document.body.dataset.tab = t;
-  $("foot").textContent = t === "sg" ? "Tiger practice account (fake money) · prices from Yahoo, refreshed hourly" : "Paper trading · Alpaca · refreshes every 15 s";
+  $("foot").textContent = t === "sg" ? "Tiger practice account (fake money) · prices from Yahoo, every 5 minutes in market hours" : "Paper trading · Alpaca · refreshes every 15 s";
   document.querySelectorAll("[data-tabbtn]").forEach(b => b.classList.toggle("on", b.dataset.tabbtn === t));
   try { localStorage.setItem(tabKey, t); } catch (_) {}
   applySec();
