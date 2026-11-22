@@ -73,6 +73,10 @@
     .bk-btns { display: flex; gap: 8px; margin-top: 10px; }
     .bk-nav { display: grid; grid-template-columns: 56px 1fr 56px; gap: 8px; align-items: center; margin-top: 8px; text-align: center; font-size: 13px; }
     .pf-pie { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 12px; align-items: center; margin-top: 8px; }
+    .pf-pies { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 8px; }
+    .pf-pies > div { min-width: 0; }
+    .pf-pies svg { display: block; margin: 0 auto 6px; width: 124px; height: 124px; }
+    .pf-pies .pf-leg span { min-width: 0; overflow-wrap: anywhere; }
     .pf-leg div { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 2px 0; }
     .pf-leg i { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; display: block; }
     .pf-leg b { margin-left: auto; font-variant-numeric: tabular-nums; }
@@ -1601,13 +1605,14 @@ function cov(a, b) { const ma = mean(a), mb = mean(b); let c = 0; for (let i = 0
 function corr(a, b) { const sa = stdev(a), sb2 = stdev(b); return sa && sb2 ? cov(a, b) / (sa * sb2) : null; }
 function maxDD(vals) { let peak = vals[0], dd = 0; vals.forEach(v => { peak = Math.max(peak, v); dd = Math.min(dd, v / peak - 1); }); return dd; }
 function quantile(a, q) { const b = a.slice().sort((x, y) => x - y), i = (b.length - 1) * q, lo = Math.floor(i); return b[lo] + (b[Math.min(lo + 1, b.length - 1)] - b[lo]) * (i - lo); }
-function bkPie(parts) {
+const STOCK_COL = ["#4c9aff", "#23c47a", "#eb6834", "#eda100", "#e87ba4", "#9085e9", "#5fb7c9", "#b3541e", "#8a97a6", "#008300"];
+function bkPie(parts, label = "Industries", colFn = secCol) {
   const R = 52, C = 2 * Math.PI * R; let off = 0;
-  const segs = parts.map(([name, w]) => { const len = w * C;
-    const seg = `<circle r="${R}" cx="66" cy="66" fill="none" stroke="${secCol(name)}" stroke-width="22" stroke-dasharray="${Math.max(len - 1.5, 0.5)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 66 66)"><title>${esc(name)} ${fmt(w * 100, 0)}%</title></circle>`;
+  const segs = parts.map(([name, w], i) => { const len = w * C;
+    const seg = `<circle r="${R}" cx="66" cy="66" fill="none" stroke="${colFn(name, i)}" stroke-width="22" stroke-dasharray="${Math.max(len - 1.5, 0.5)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 66 66)"><title>${esc(name)} ${fmt(w * 100, 0)}%</title></circle>`;
     off += len; return seg; }).join("");
-  return `<svg viewBox="0 0 132 132" width="132" height="132" role="img" aria-label="Industry mix pie chart">${segs}
-    <text x="66" y="62" text-anchor="middle" font-size="11" fill="var(--muted, #8a97a6)">Industries</text>
+  return `<svg viewBox="0 0 132 132" width="132" height="132" role="img" aria-label="${label} pie chart">${segs}
+    <text x="66" y="62" text-anchor="middle" font-size="11" fill="var(--muted, #8a97a6)">${label}</text>
     <text x="66" y="80" text-anchor="middle" font-size="18" font-weight="700" fill="var(--text)">${parts.length}</text></svg>`;
 }
 const pfExplainKey = "tb_pf_explain";
@@ -1862,7 +1867,14 @@ async function bkPort() {
   const span = st ? (st.yrs > 0.95 ? "1y" : `${fmt(st.yrs * 12, 0)}m`) : "1y";
   const kpi = (l, v, sm) => `<div><span class="l">${l}</span><b>${v}</b>${sm ? `<small>${sm}</small>` : ""}</div>`;
   const tone = (x) => `<span class="${x >= 0 ? "up" : "down"}">${pfPct(x, 1)}</span>`;
-  let h = `<div class="pf-kpi">
+  // pies first, always visible: share of the money by industry and by stock
+  const sparts = W.slice().sort((a, b) => b.w - a.w).map(x => [shortSym(x.sym), x.w]);
+  const stockCol = (_, i) => STOCK_COL[i % STOCK_COL.length];
+  const sleg = sparts.map(([n, w], i) => `<div><i style="background:${stockCol(n, i)}"></i><span>${esc(n)}</span><b>${fmt(w * 100, 0)}%</b></div>`).join("");
+  let h = `<div class="pf-sub" style="margin-top:10px">Where the money goes</div>
+    <div class="pf-pies"><div>${bkPie(parts, "Industries")}<div class="pf-leg">${leg}</div></div>
+      <div>${bkPie(sparts, "Stocks", stockCol)}<div class="pf-leg">${sleg}</div></div></div>
+    <div class="pf-kpi">
     ${kpi(`Return ${span}`, st ? tone(st.ret) : "—", st ? `${bshort} ${pfPct(st.bret, 1)}` : "")}
     ${kpi("Volatility", st ? pfPct(st.vol, 0) : "—", st ? `${bshort} ${pfPct(st.bvol, 0)}` : "")}
     ${kpi("Max drawdown", st ? `<span class="down">${pfPct(st.dd, 0)}</span>` : "—", st ? `${bshort} ${pfPct(st.bdd, 0)}` : "")}
@@ -1874,7 +1886,7 @@ async function bkPort() {
     <div class="chips" id="pf-rng" style="margin-top:6px">${["1Y", "3Y", "5Y"].map(r => `<div class="chip" data-rng="${r}" style="padding:5px 14px;cursor:pointer" onclick="pfDraw('${r}')">${r}</div>`).join("")}</div>`;
   h += `<div class="itabs" id="pf-itabs">${PF_ISECS.map(([k, n]) => `<button data-pk="${k}" onclick="setPSec('${k}')">${n}</button>`).join("")}</div>`;
   // exposure
-  h += `<div data-psec="exp"><div class="pf-pie">${bkPie(parts)}<div class="pf-leg">${leg}</div></div>`;
+  h += `<div data-psec="exp">`;
   h += pfRow("Company size", sizeTxt, "Mega = over 200b market value, Large 10 to 200b, Mid 2 to 10b, Small under 2b. Bigger companies tend to swing less.", "r") +
     pfRow("Forward P/E", peFwd ? fmt(peFwd, 1) : "—", "Price you pay per 1 of next year's expected profit, averaged the way funds do it (harmonic). Lower = cheaper, but cheap can be cheap for a reason.", "p") +
     pfRow("Dividend yield", divY == null ? "—" : `${fmt(divY, 2)}%`, `Yearly cash paid out as dividends, about ${cur}${fmt(total * (divY || 0) / 100, 0)} on this basket if payouts hold.`, "x") +
