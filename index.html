@@ -378,6 +378,7 @@
       <div><label for="bk-style">Idea style</label><select id="bk-style">
         <option value="traded">Most traded (random mix)</option>
         <option value="steady">Steady (smallest swings)</option>
+        <option value="lowbeta">Low beta (less tied to market)</option>
         <option value="trend">Trend leaders</option>
         <option value="income">Dividend payers</option>
         <option value="value">Cheaper valuation</option></select></div>
@@ -1056,6 +1057,7 @@ const CMP = [
   { k: "est", lab: "Estimate change", note: "How analysts moved this year's profit estimate over 90 days. Raised first.", get: d => d.eps_rev_90d, show: v => signed(v * 100, 1, true) },
   { k: "target", lab: "Target gap", note: "How far the price sits below the average analyst target. Very large gaps often mean stale targets.", get: upsideOf, show: v => signed(v * 100, 0, true) },
   { k: "div", lab: "Dividend", note: "Highest dividend yield first.", get: d => d.div_yield, show: v => fmt(v, 1) + "%" },
+  { k: "beta", lab: "Beta", note: "Lowest first. How much the stock moved when its market moved 1% over the past year: under 1 is calmer than the market, over 1 is jumpier. A risk gauge, not a forecast.", asc: true, get: (d, r) => bkUni[r.symbol]?.beta ?? d.beta, show: v => fmt(v, 2) },
   { k: "roe", lab: "ROE", note: "Profit earned on shareholders' money. Above 10% is decent, above 15% is strong.", get: d => d.roe, show: v => pct(v, 0) },
   { k: "debt", lab: "Debt", note: "Lowest debt against equity first. REITs normally carry more debt. Banks are left blank: their debt is customer deposits.", asc: true, get: d => d.debt_to_equity, show: v => fmt(v, 2) + "x" },
   { k: "trend", lab: "vs 200-day", note: "Price against its 200-day average. Above zero is an uptrend.", get: d => d.ma200 && d.price ? d.price / d.ma200 - 1 : null, show: v => signed(v * 100, 0, true) },
@@ -1070,7 +1072,7 @@ function renderCmp() {
   $("cmp-metrics").innerHTML = CMP.map(x => `<div class="chip ${x.k === m.k ? "sel" : ""}" style="padding:6px 12px" onclick="setCmp('${x.k}')">${x.lab}</div>`).join("");
   $("cmp-note").textContent = m.note;
   const rows = sgxCache.wl.filter(r => r.enabled && inMkt(r) && sgxCache.res[r.symbol]).map(r => {
-    const d = sgxCache.res[r.symbol].data; return { r, d, v: m.get(d) };
+    const d = sgxCache.res[r.symbol].data; return { r, d, v: m.get(d, r) };
   });
   rows.sort((a, b) => (a.v == null) - (b.v == null) || (m.asc ? a.v - b.v : b.v - a.v));
   $("cmp-n").textContent = rows.length ? rows.length + (rows.length === 1 ? " stock" : " stocks") : "";
@@ -1488,13 +1490,13 @@ async function bkCompare() {
     return { i, it, st, dy: dw ? dv / dw : null };
   }).reverse();
   box.innerHTML = `<div class="pf-sub">Compare your ideas (${list.length}) · tap one to open it</div>
-    <table class="pf-rt bk-ct"><tr><th>Idea</th><th class="r">1 yr</th><th class="r">Swing</th><th class="r">Drop</th><th class="r">Yield</th><th></th></tr>` +
+    <table class="pf-rt bk-ct"><tr><th>Idea</th><th class="r">1 yr</th><th class="r">Swing</th><th class="r">Drop</th><th class="r">Beta</th><th class="r">Yield</th><th></th></tr>` +
     rows.map(r => `<tr class="${bkCur.idea === r.i ? "cur" : ""}" onclick="bkShowIdea(${r.i})"><td>${esc(r.it.name)}<div class="sub">${r.it.items.map(x => esc(shortSym(x.symbol))).join(" ")}</div></td>
-      <td class="r">${r.st ? c(r.st.ret) : "—"}</td><td class="r">${r.st ? pfPct(r.st.vol, 0) : "—"}</td><td class="r">${r.st ? `<span class="down">${pfPct(r.st.dd, 0)}</span>` : "—"}</td>
+      <td class="r">${r.st ? c(r.st.ret) : "—"}</td><td class="r">${r.st ? pfPct(r.st.vol, 0) : "—"}</td><td class="r">${r.st ? `<span class="down">${pfPct(r.st.dd, 0)}</span>` : "—"}</td><td class="r">${r.st ? pfNum(r.st.beta, 2) : "—"}</td>
       <td class="r">${r.dy == null ? "—" : fmt(r.dy, 1) + "%"}</td>
       <td class="r"><span class="x" onclick="event.stopPropagation(); bkDelIdea(${r.i})" aria-label="Delete this idea">✕</span></td></tr>`).join("") +
-    (bst ? `<tr style="cursor:default"><td class="sub">${esc(bshort)} (the market)</td><td class="r">${c(bst.bret)}</td><td class="r">${pfPct(bst.bvol, 0)}</td><td class="r"><span class="down">${pfPct(bst.bdd, 0)}</span></td><td class="r">—</td><td></td></tr>` : "") +
-    `</table><div class="sub" style="margin-top:6px">Last year with dividends, each idea at its own weights. Swing = yearly volatility, Drop = worst fall from a high. Ideas stay on this phone until you delete them. <a href="#" style="color:var(--accent)" onclick="event.preventDefault(); bkClearIdeas()">Delete all</a></div>`;
+    (bst ? `<tr style="cursor:default"><td class="sub">${esc(bshort)} (the market)</td><td class="r">${c(bst.bret)}</td><td class="r">${pfPct(bst.bvol, 0)}</td><td class="r"><span class="down">${pfPct(bst.bdd, 0)}</span></td><td class="r">1.00</td><td class="r">—</td><td></td></tr>` : "") +
+    `</table><div class="sub" style="margin-top:6px">Last year with dividends, each idea at its own weights. Swing = yearly volatility, Drop = worst fall from a high, Beta = how much it moved when the market moved 1%. Ideas stay on this phone until you delete them. <a href="#" style="color:var(--accent)" onclick="event.preventDefault(); bkClearIdeas()">Delete all</a></div>`;
   bkCmpSig = sig;
 }
 // Yahoo sector names -> the usual (GICS-style) names, plus a short form for basket names
@@ -1547,6 +1549,7 @@ const BK_STYLES = {
   traded: ["the 30 most traded stocks (money traded per day, last 20 days)", null, true],
   steady: ["the stocks with the smallest price swings over the past year", u => u.vol > 0 ? Number(u.vol) : null, false],
   trend: ["the stocks with the strongest 12-month trend (skipping the latest month)", u => u.mom != null ? Number(u.mom) : null, true],
+  lowbeta: ["the stocks that moved least with the market over the past year (lowest beta)", u => u.beta != null ? Number(u.beta) : null, false],
   income: ["the highest dividend yields", u => u.div_yield > 0 ? Number(u.div_yield) : null, true],
   value: ["the lowest forward P/E (price against next year's expected profit)", u => u.pe_fwd > 0 ? Number(u.pe_fwd) : null, false],
 };
@@ -1622,7 +1625,7 @@ async function bkLoad() {
     sb.from("tb_universe").select("symbol,market,name,sector,currency,price,avg_value,in_pool,beta,vol,ret_1y,mom,pe_fwd,div_yield,mcap")]);
   if (!b.error) bkList = b.data || [];
   if (!u.error) { bkUni = {}; (u.data || []).forEach(r => { r.price = Number(r.price); r.avg_value = Number(r.avg_value); bkUni[r.symbol] = r; }); }
-  bkRender();
+  bkRender(); renderCmp();   // ranking by beta uses the universe numbers once they arrive
 }
 function bkPlan() {
   const amt = parseFloat($("bk-amt").value) || 0;
@@ -1652,7 +1655,7 @@ function bkRender() {
   const plan = bkPlan();
   $("bk-rows").innerHTML = plan.map((r, i) => `<div class="bk-row">
       <div><b>${esc(r.d ? r.d.name : r.symbol)}</b> <span class="sub">${esc(shortSym(r.symbol))}</span>
-        <div class="sub bk-info">${r.d ? `${r.q} share${r.q === 1 ? "" : "s"} × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(secName(r.d.sector))}` : "No price yet"}</div>${bkUni[r.symbol] ? `<div class="sub">Trades about ${bkMoney()}${bkBig(bkUni[r.symbol].avg_value)} a day${bkUni[r.symbol].div_yield != null ? ` · dividend yield ${fmt(bkUni[r.symbol].div_yield, 1)}%` : ""}</div>` : ""}</div>
+        <div class="sub bk-info">${r.d ? `${r.q} share${r.q === 1 ? "" : "s"} × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(secName(r.d.sector))}` : "No price yet"}</div>${bkUni[r.symbol] ? `<div class="sub">Trades about ${bkMoney()}${bkBig(bkUni[r.symbol].avg_value)} a day${bkUni[r.symbol].div_yield != null ? ` · dividend yield ${fmt(bkUni[r.symbol].div_yield, 1)}%` : ""}${bkUni[r.symbol].beta != null ? ` · beta ${fmt(bkUni[r.symbol].beta, 2)}` : ""}</div>` : ""}</div>
       <input type="number" min="0" max="100" step="1" inputmode="numeric" value="${r.w}" data-bkw="${i}" aria-label="Weight % for ${esc(r.symbol)}">
       <span class="x" data-bkx="${i}" aria-label="Remove">✕</span></div>`).join("")
     || `<div class="empty">No stocks yet. Use "Add a stock" above.</div>`;
@@ -2014,7 +2017,15 @@ async function bkPort() {
   if (st) {
     const rcBars = st.H.map((x, i) => ({ sym: x.sym, w: x.w / st.H.reduce((a, y) => a + y.w, 0), rc: st.rc[i] })).sort((a, b) => b.rc - a.rc);
     const mx = Math.max(...rcBars.map(b => Math.max(b.rc, b.w)), 0.01);
+    // each stock on its own against the index: beta, correlation, swing, share of the index's down days
+    const per = st.H.map(x => ({ sym: x.sym, s: calcStats([bkHist[x.sym]], [1], bh) })).filter(x => x.s).sort((a, b) => b.s.beta - a.s.beta);
+    const perRow = (lab, o) => `<tr><td>${lab}</td><td class="r">${pfNum(o.beta)}</td><td class="r">${pfNum(o.corrB)}</td><td class="r">${pfPct(o.vol, 0)}</td><td class="r">${o.dnCap == null ? "—" : pfNum(o.dnCap * 100, 0) + "%"}</td></tr>`;
     h += `<div data-psec="risk">` +
+      `<div class="pf-sub">Each stock against the ${bshort}</div>
+       <table class="pf-rt"><tr><th>Stock</th><th class="r">Beta</th><th class="r">Follows</th><th class="r">Swing</th><th class="r">Down days</th></tr>` +
+      per.map(x => perRow(esc(shortSym(x.sym)), x.s)).join("") +
+      perRow("<b>This basket</b>", st) + perRow(`<span class="sub">${bshort}</span>`, { beta: 1, corrB: 1, vol: st.bvol, dnCap: 1 }) + `</table>
+       <div class="sub pf-why">Beta: if the ${bshort} moves 1%, the stock has tended to move this many %. Under 1 = calmer than the market, over 1 = jumpier. Follows: how closely its daily moves track the ${bshort} (1 = in step, 0 = unrelated). Beta = Follows × (its swing ÷ the market's swing), so a stock can follow the market loosely and still have a high beta if it swings a lot. Down days: share of the market's fall it took on days the market fell. A risk gauge from the past year, not a forecast of returns.</div>` +
       pfRow("Bad day (1 in 20)", `<span class="down">-${cur}${fmt(st.var95 * total, 0)}</span>`, `Value at Risk, 95%: on about 1 trading day in 20 the basket fell more than ${pfPct(st.var95, 1)}.`, "r") +
       pfRow("Average of those bad days", `<span class="down">-${cur}${fmt(st.cvar95 * total, 0)}</span>`, `Expected shortfall (CVaR): when a 1-in-20 bad day comes, the average loss is ${pfPct(st.cvar95, 1)}.`, "r") +
       pfRow(`If the ${bshort} falls 10%`, `<span class="down">-${cur}${fmt(Math.max(beta, 0) * 0.10 * total, 0)}</span>`, `Rough estimate from beta: ${pfNum(beta)} × 10%. Real crashes can hit harder because stocks start moving together.`, "r") +
