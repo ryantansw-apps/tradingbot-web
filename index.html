@@ -95,6 +95,10 @@
     .pf-hm { display: grid; gap: 2px; font-size: 10px; margin-top: 6px; }
     .pf-hm span { display: grid; place-items: center; height: 28px; border-radius: 3px; font-variant-numeric: tabular-nums; }
     .pf-hm .lab { height: auto; color: var(--muted, #8a97a6); overflow: hidden; white-space: nowrap; }
+    .pf-rt { margin-top: 6px; font-size: 13px; }
+    .pf-rt th { font-size: 11px; color: var(--muted, #8a97a6); font-weight: 600; }
+    .pf-rt td.r, .pf-rt th.r { text-align: right; white-space: nowrap; font-weight: 600; padding-left: 4px; padding-right: 2px; }
+    .pf-rt td .sub { font-size: 11.5px; font-weight: 400; }
     .pf-m { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
     .pf-m:last-child { border-bottom: 0; }
     .pf-m .t { display: flex; justify-content: space-between; gap: 8px; }
@@ -1413,7 +1417,7 @@ function bkSum() {
 // shares). Risk/return numbers come from 1 year of daily closes
 // (tb_universe.hist), aligned on the dates every holding and the benchmark
 // share. Benchmarks: SPY for US, ES3.SI (SPDR STI ETF) for SGX.
-const bkHist = {};
+const bkHist = {}, bkHistW = {};   // 1y daily / 5y weekly closes (dividend-adjusted)
 let bkPortT = null, bkChart = null;
 function bkPortSoon() { clearTimeout(bkPortT); bkPortT = setTimeout(bkPort, 250); }
 const pfPct = (x, d = 1) => x == null || !isFinite(x) ? "—" : `${x >= 0 ? "" : "-"}${fmt(Math.abs(x) * 100, d)}%`;
@@ -1434,7 +1438,7 @@ function bkPie(parts) {
     <text x="66" y="80" text-anchor="middle" font-size="18" font-weight="700" fill="var(--text)">${parts.length}</text></svg>`;
 }
 const pfExplainKey = "tb_pf_explain";
-const PF_ISECS = [["exp", "Exposure"], ["risk", "Risk"], ["mkt", "Vs market"]];
+const PF_ISECS = [["ret", "Returns"], ["exp", "Exposure"], ["risk", "Risk"], ["mkt", "Vs market"]];
 let pfISec = (() => { try { const v = localStorage.getItem("tb_psec"); return PF_ISECS.some(x => x[0] === v) ? v : "exp"; } catch (_) { return "exp"; } })();
 function setPSec(k) { pfISec = k; try { localStorage.setItem("tb_psec", k); } catch (_) {} applyPSec(); }
 function applyPSec() {
@@ -1498,10 +1502,10 @@ function calcStats(hists, wts, bh) {
 async function needHist(syms) {
   const need = syms.filter(sy => !(sy in bkHist));
   if (!need.length) return true;
-  const { data, error } = await sb.from("tb_universe").select("symbol,hist").in("symbol", need);
+  const { data, error } = await sb.from("tb_universe").select("symbol,hist,hist_w").in("symbol", need);
   if (error) return false;
-  need.forEach(sy => bkHist[sy] = null);
-  (data || []).forEach(r => bkHist[r.symbol] = r.hist || null);
+  need.forEach(sy => { bkHist[sy] = null; bkHistW[sy] = null; });
+  (data || []).forEach(r => { bkHist[r.symbol] = r.hist || null; bkHistW[r.symbol] = r.hist_w || null; });
   return true;
 }
 // Ratios tab for one Research stock
@@ -1518,6 +1522,7 @@ async function sgxRatios(sym) {
   }
   const st = calcStats([h], [1], bh);
   if (!st) { box().innerHTML = `<div class="empty">Not enough shared price history with the ${bname} yet.</div>`; return; }
+  const pr1 = pastReturns([sym], [1], bench);
   const on = document.body.classList.contains("pf-explain");
   const kpi = (l, v, sm) => `<div><span class="l">${l}</span><b>${v}</b>${sm ? `<small>${sm}</small>` : ""}</div>`;
   const tone = (x) => x == null ? "—" : `<span class="${x >= 0 ? "up" : "down"}">${pfPct(x, 1)}</span>`;
@@ -1531,6 +1536,7 @@ async function sgxRatios(sym) {
       ${kpi("Max drawdown", `<span class="down">${pfPct(st.dd, 0)}</span>`, `${bshort} ${pfPct(st.bdd, 0)}`)}
       ${kpi("Sharpe", pfNum(st.sharpe), `${bshort} ${pfNum(st.bsharpe)}`)}
     </div>
+    ${pr1 ? `<div class="pf-sub">Past returns vs the ${bname}</div>${retTable(pr1, 1000, cur, bshort, "Stock")}` : ""}
     <div class="pf-sub">Trend</div>` +
     pfRow("Momentum (12 months, skip last 1)", tone(st.mom), "Return from 12 months ago to 1 month ago. One of the best-documented patterns: stocks that rose tend to keep rising for 3 to 12 months, though it can reverse sharply in crashes.", "p") +
     pfRow("Return, last 6 months", tone(st.r6), "Shorter trend check.", "x") +
@@ -1550,6 +1556,96 @@ async function sgxRatios(sym) {
     pfRow("Sharpe / Sortino / Calmar", `${pfNum(st.sharpe)} / ${pfNum(st.sortino)} / ${pfNum(st.calmar)}`, "Return per unit of swing / of downside swing / of worst drop. Over 1 year these are mostly noise.", "x") +
     (u.avg_value ? pfRow("Money traded per day", `${cur}${bkBig(u.avg_value)}`, "How easy it is to buy and sell at a fair price. Says nothing about future returns.", "") : "") +
     `<div class="sub" style="margin-top:10px">Tags: <span class="tg tg-p">Predictive</span> some proven link to future returns · <span class="tg tg-r">Risk gauge</span> predicts risk, not return · <span class="tg tg-x">Past only</span> describes what happened. Daily closes, last year (Yahoo), 0% risk-free rate. Not advice.</div>`;
+}
+// ---- Past returns: "if I had bought this mix N ago, with these weights".
+// Buy-and-hold from the start of each period, dividends included, before fees.
+// Up to 1 year from daily closes, longer periods and past calendar years from
+// weekly closes. A period is blank when a holding was not listed yet.
+function pxAt(h, d) { for (let i = h.length - 1; i >= 0; i--) if (h[i][0] <= d) return h[i][1]; return null; }
+const ymLabel = (d) => new Date(Date.UTC(Math.floor(d / 10000), Math.floor(d / 100) % 100 - 1, 1)).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" });
+function pastReturns(syms, wts, bench) {
+  const D = syms.map(sy => bkHist[sy]), Wk = syms.map(sy => bkHistW[sy]), bd = bkHist[bench], bw = bkHistW[bench];
+  if (!Array.isArray(bd) || !bd.length) return null;
+  const ws = wts.reduce((a, x) => a + x, 0), w = wts.map(x => x / ws);
+  const ret = (H, bh, d0, d1) => {
+    let b = 0;
+    for (let i = 0; i < H.length; i++) {
+      if (!Array.isArray(H[i])) return { b: null, m: null };
+      const p0 = pxAt(H[i], d0), p1 = pxAt(H[i], d1);
+      if (!(p0 > 0) || !(p1 > 0)) { b = null; break; }
+      b += w[i] * (p1 / p0 - 1);
+    }
+    const m0 = pxAt(bh, d0), m1 = pxAt(bh, d1);
+    return { b, m: m0 > 0 && m1 > 0 ? m1 / m0 - 1 : null };
+  };
+  const d1 = bd[bd.length - 1][0], periods = [], years = [];
+  [["1 week ago", 5], ["1 month ago", 21], ["3 months ago", 63], ["6 months ago", 126], ["1 year ago", 252]].forEach(([label, k]) => {
+    const i = bd.length - 1 - k; if (i < 0) return;
+    periods.push({ label, ...ret(D, bd, bd[i][0], d1) });
+  });
+  if (Array.isArray(bw) && bw.length > 60) {
+    [["3 years ago", 156], ["5 years ago", 260]].forEach(([label, k]) => {
+      const i = bw.length - 1 - k;
+      if (i < -8) return;                       // history far too short for this period
+      const d0 = bw[Math.max(i, 0)][0], yrs = (bw.length - 1 - Math.max(i, 0)) / 52;
+      const r = ret(Wk, bw, d0, bw[bw.length - 1][0]);
+      periods.push({ label, ...r, ann: r.b == null ? null : Math.pow(1 + r.b, 1 / yrs) - 1, mAnn: r.m == null ? null : Math.pow(1 + r.m, 1 / yrs) - 1 });
+    });
+    const cy = Math.floor(d1 / 10000);
+    for (let y = cy - 4; y <= cy; y++) {
+      const d0 = (y - 1) * 10000 + 1231, dE = y === cy ? d1 : y * 10000 + 1231;
+      const daily = bd[0][0] <= d0;              // this year fits inside the daily history: exact dates
+      if (!daily && bw[0][0] > d0) continue;     // no price before the year began
+      years.push({ label: y === cy ? `${y} so far` : String(y), ...(daily ? ret(D, bd, d0, dE) : ret(Wk, bw, d0, dE)) });
+    }
+  }
+  return { periods, years };
+}
+function retTable(pr, total, cur, bshort, who) {
+  const c = (x) => x == null ? `<span class="sub">—</span>` : `<span class="${x >= 0 ? "up" : "down"}">${x >= 0 ? "+" : ""}${pfPct(x, 1)}</span>`;
+  const row = (r) => `<tr><td>${r.label}<div class="sub">${r.b == null ? "Not every stock was listed yet"
+      : `${cur}${fmt(total, 0)} → ${cur}${fmt(total * (1 + r.b), 0)}${r.ann != null ? ` · ${pfPct(r.ann, 1)}/yr` : ""}`}</div></td>
+    <td class="r">${c(r.b)}</td><td class="r">${c(r.m)}</td><td class="r">${r.b != null && r.m != null ? c(r.b - r.m) : `<span class="sub">—</span>`}</td></tr>`;
+  const head = (t) => `<tr><th>${t}</th><th class="r">${who}</th><th class="r">${esc(bshort)}</th><th class="r">Diff</th></tr>`;
+  const all = [...pr.periods, ...pr.years].filter(r => r.b != null && r.m != null), beat = all.filter(r => r.b > r.m).length;
+  return `<table class="pf-rt">${head("If bought")}${pr.periods.map(row).join("")}</table>` +
+    (pr.years.length ? `<div class="pf-sub">Calendar years</div><table class="pf-rt">${head("Year")}${pr.years.map(row).join("")}</table>` : "") +
+    (all.length ? `<div class="sub" style="margin-top:8px">Ahead of the ${esc(bshort)} in <b>${beat} of ${all.length}</b> periods shown. Dividends included, before fees.</div>` : "");
+}
+// Growth chart with a range switch (1Y daily, 3Y / 5Y weekly)
+let pfCh = null, pfRng = "1Y";
+function pfDraw(rng) {
+  if (rng) pfRng = rng;
+  const el = $("pf-chart"); if (!el || !pfCh || typeof LightweightCharts === "undefined") return;
+  let dates, val, bval;
+  const bw = bkHistW[pfCh.bench], Hs = pfCh.syms.map(sy => bkHistW[sy]);
+  const haveW = Array.isArray(bw) && bw.length > 60 && Hs.every(h => Array.isArray(h) && h.length);
+  if (pfRng !== "1Y" && !haveW) pfRng = "1Y";
+  if (pfRng === "1Y") ({ dates, value: val, bval } = pfCh.daily);
+  else {
+    const k = pfRng === "3Y" ? 156 : 260;
+    const start = Math.max(bw[Math.max(0, bw.length - 1 - k)][0], ...Hs.map(h => h[0][0]));
+    dates = bw.map(x => x[0]).filter(d => d >= start);
+    const p0 = Hs.map(h => pxAt(h, start)), m0 = pxAt(bw, start);
+    val = dates.map(d => Hs.reduce((a, h, i) => a + pfCh.w[i] * pxAt(h, d) / p0[i], 0));
+    bval = dates.map(d => pxAt(bw, d) / m0);
+  }
+  $("pf-chart-t").innerHTML = `${pfCh.cur}${fmt(pfCh.total, 0)} invested in ${ymLabel(dates[0])} vs the ${pfCh.bname}`;
+  document.querySelectorAll("#pf-rng [data-rng]").forEach(b => { b.classList.toggle("sel", b.dataset.rng === pfRng); b.style.opacity = b.dataset.rng !== "1Y" && !haveW ? ".4" : ""; });
+  if (bkChart) { try { bkChart.remove(); } catch (_) {} bkChart = null; }
+  const t = (d) => `${String(d).slice(0, 4)}-${String(d).slice(4, 6)}-${String(d).slice(6, 8)}`;
+  const txt = cssVar("--muted", "#8a97a6"), line = cssVar("--line", "#2a3140");
+  bkChart = LightweightCharts.createChart(el, { width: el.clientWidth || 320, height: 170,
+    layout: { background: { color: "transparent" }, textColor: txt, fontSize: 10 },
+    grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
+    rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false },
+    handleScroll: false, handleScale: false, crosshair: { mode: 0 } });
+  const fmtP = { type: "price", precision: 0, minMove: 1 };
+  const a = bkChart.addLineSeries({ color: cssVar("--accent", "#4c9aff"), lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: pfCh.who, priceFormat: fmtP });
+  const b = bkChart.addLineSeries({ color: "#8a97a6", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: true, title: pfCh.bshort, priceFormat: fmtP });
+  a.setData(dates.map((d, i) => ({ time: t(d), value: Math.round(pfCh.total * val[i]) })));
+  b.setData(dates.map((d, i) => ({ time: t(d), value: Math.round(pfCh.total * bval[i]) })));
+  bkChart.timeScale().fitContent();
 }
 const SIZE_BANDS = [["Mega", 200e9], ["Large", 10e9], ["Mid", 2e9], ["Small", 0]];
 async function bkPort() {
@@ -1601,7 +1697,8 @@ async function bkPort() {
     ${kpi("Sharpe", st ? pfNum(st.sharpe) : "—", st ? `${bshort} ${pfNum(st.bsharpe)}` : "")}
     ${kpi("Div. yield", divY == null ? "—" : `${fmt(divY, 1)}%`, divY == null ? "" : `≈ ${cur}${fmt(total * divY / 100, 0)} / yr`)}
   </div>`;
-  if (st) h += `<div class="pf-sub">${cur}${fmt(total, 0)} invested ${span === "1y" ? "a year" : span} ago vs the ${bname}</div><div id="pf-chart" style="height:170px"></div>`;
+  if (st) h += `<div class="pf-sub" id="pf-chart-t"></div><div id="pf-chart" style="height:170px"></div>
+    <div class="chips" id="pf-rng" style="margin-top:6px">${["1Y", "3Y", "5Y"].map(r => `<div class="chip" data-rng="${r}" style="padding:5px 14px;cursor:pointer" onclick="pfDraw('${r}')">${r}</div>`).join("")}</div>`;
   h += `<div class="itabs" id="pf-itabs">${PF_ISECS.map(([k, n]) => `<button data-pk="${k}" onclick="setPSec('${k}')">${n}</button>`).join("")}</div>`;
   // exposure
   h += `<div data-psec="exp"><div class="pf-pie">${bkPie(parts)}<div class="pf-leg">${leg}</div></div>`;
@@ -1609,6 +1706,11 @@ async function bkPort() {
     pfRow("Forward P/E", peFwd ? fmt(peFwd, 1) : "—", "Price you pay per 1 of next year's expected profit, averaged the way funds do it (harmonic). Lower = cheaper, but cheap can be cheap for a reason.", "p") +
     pfRow("Dividend yield", divY == null ? "—" : `${fmt(divY, 2)}%`, `Yearly cash paid out as dividends, about ${cur}${fmt(total * (divY || 0) / 100, 0)} on this basket if payouts hold.`, "x") +
     pfRow("Market", mkt === "US" ? "US · US$" : "Singapore · S$", "Where the shares trade and the currency your money is in.") + `</div>`;
+  // past returns vs the benchmark
+  const pr = st ? pastReturns(st.H.map(x => x.sym), st.H.map(x => x.w), bench) : null;
+  h += `<div data-psec="ret">${pr ? retTable(pr, total, cur, bshort, "Basket") +
+      `<div class="sub warn" style="margin-top:8px">Read with care: this mix is built from TODAY's stocks, and "most traded today" tends to mean "did well recently". Nobody could have picked exactly this list years ago, so the past looks better than a real pick would have. Each row starts with today's weights and holds them to the end of that period, with no rebalancing.</div>`
+    : `<div class="empty">Not enough price history yet for past returns.</div>`}</div>`;
   // risk
   if (st) {
     const rcBars = st.H.map((x, i) => ({ sym: x.sym, w: x.w / st.H.reduce((a, y) => a + y.w, 0), rc: st.rc[i] })).sort((a, b) => b.rc - a.rc);
@@ -1651,25 +1753,16 @@ async function bkPort() {
   } else {
     h += `<div class="sub" style="margin-top:8px">Not enough shared price history yet for risk and performance numbers.</div>`;
   }
-  h += `<div class="sub" style="margin-top:10px">Daily closes over the last year (Yahoo), refreshed hourly. Ratios use a 0% risk-free rate. Facts about the past, not a forecast or advice.</div>`;
+  h += `<div class="sub" style="margin-top:10px">Closing prices with dividends included (Yahoo), refreshed hourly: daily for the last year, weekly for 5 years. Ratios use the last year and a 0% risk-free rate. Facts about the past, not a forecast or advice.</div>`;
   if ($("bk-port") !== box) return;
   $("pf-body").innerHTML = h;
   applyPSec();
   // growth chart
-  if (st && typeof LightweightCharts !== "undefined") {
-    const el = $("pf-chart"); if (bkChart) { try { bkChart.remove(); } catch (_) {} bkChart = null; }
-    const t = (d) => `${String(d).slice(0, 4)}-${String(d).slice(4, 6)}-${String(d).slice(6, 8)}`;
-    const txt = cssVar("--muted", "#8a97a6"), line = cssVar("--line", "#2a3140");
-    bkChart = LightweightCharts.createChart(el, { width: el.clientWidth || 320, height: 170,
-      layout: { background: { color: "transparent" }, textColor: txt, fontSize: 10 },
-      grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
-      rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false },
-      handleScroll: false, handleScale: false, crosshair: { mode: 0 } });
-    const a = bkChart.addLineSeries({ color: cssVar("--accent", "#4c9aff"), lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: "Basket", priceFormat: { type: "price", precision: 0, minMove: 1 } });
-    const b = bkChart.addLineSeries({ color: "#8a97a6", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: true, title: bshort, priceFormat: { type: "price", precision: 0, minMove: 1 } });
-    a.setData(st.dates.map((d, i) => ({ time: t(d), value: Math.round(total * st.value[i]) })));
-    b.setData(st.dates.map((d, i) => ({ time: t(d), value: Math.round(total * st.bval[i]) })));
-    bkChart.timeScale().fitContent();
+  if (st) {
+    const wsum = st.H.reduce((a, x) => a + x.w, 0);
+    pfCh = { total, cur, bname, bshort, bench, who: "Basket", syms: st.H.map(x => x.sym), w: st.H.map(x => x.w / wsum),
+      daily: { dates: st.dates, value: st.value, bval: st.bval } };
+    pfDraw();
   }
 }
 function bkPick() {
