@@ -1549,7 +1549,7 @@ function bkRender() {
   const plan = bkPlan();
   $("bk-rows").innerHTML = plan.map((r, i) => `<div class="bk-row">
       <div><b>${esc(r.d ? r.d.name : r.symbol)}</b> <span class="sub">${esc(shortSym(r.symbol))}</span>
-        <div class="sub bk-info">${r.d ? `${r.q} share${r.q === 1 ? "" : "s"} × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(secName(r.d.sector))}` : "No price yet"}</div>${bkUni[r.symbol] ? `<div class="sub">Trades about ${bkMoney()}${bkBig(bkUni[r.symbol].avg_value)} a day</div>` : ""}</div>
+        <div class="sub bk-info">${r.d ? `${r.q} share${r.q === 1 ? "" : "s"} × ${bkMoney()}${fmt(r.px, r.px < 1 ? 3 : 2)} = ${bkMoney()}${fmt(r.v, 2)} · ${esc(secName(r.d.sector))}` : "No price yet"}</div>${bkUni[r.symbol] ? `<div class="sub">Trades about ${bkMoney()}${bkBig(bkUni[r.symbol].avg_value)} a day${bkUni[r.symbol].div_yield != null ? ` · dividend yield ${fmt(bkUni[r.symbol].div_yield, 1)}%` : ""}</div>` : ""}</div>
       <input type="number" min="0" max="100" step="1" inputmode="numeric" value="${r.w}" data-bkw="${i}" aria-label="Weight % for ${esc(r.symbol)}">
       <span class="x" data-bkx="${i}" aria-label="Remove">✕</span></div>`).join("")
     || `<div class="empty">No stocks yet. Use "Add a stock" above.</div>`;
@@ -1578,11 +1578,15 @@ function bkSum() {
   if (zero.length) warn.push(`Amount too small to buy even 1 share of ${zero.map(r => shortSym(r.symbol)).join(", ")}.`);
   if (spent > 0 && fees / spent > 0.02) warn.push(`Fees are about ${(fees / spent * 100).toFixed(1)}% of the money. Fewer stocks or a bigger amount lowers this.`);
   const row = (a, b) => `<div class="ord-row"><span>${a}</span><b>${b}</b></div>`;
+  // basket dividend yield: each stock's yield weighted by the money bought
+  let dyV = 0, dyW = 0; plan.forEach(r => { const y = bkUni[r.symbol]?.div_yield; if (y != null && r.v > 0) { dyV += r.v * Number(y); dyW += r.v; } });
+  const dy = dyW ? dyV / dyW : null;
   $("bk-sum").innerHTML =
     row("Stocks", plan.length) +
     row("Bought now", `${cur}${fmt(spent, 2)}`) +
     row("Cash left over", `${cur}${fmt(Math.max(amt - spent, 0), 2)}`) +
     row("Fees, rough", `${cur}${fmt(fees, 2)}${spent ? ` (${(fees / spent * 100).toFixed(2)}%)` : ""}`) +
+    row("Dividend yield", dy == null ? "—" : `${fmt(dy, 2)}% · about ${cur}${fmt(spent * dy / 100, 0)} a year`) +
     row("Industries", `${Object.keys(sectors).length}`) +
     row("Biggest industry", `${esc(topSec[0])} ${fmt(topSec[1], 0)}%`) +
     row("Biggest single stock", `${esc(shortSym(topStock.symbol))} ${fmt(topStock.w, 0)}%`) +
