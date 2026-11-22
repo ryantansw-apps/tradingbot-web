@@ -449,7 +449,7 @@
     </div>
   </div>
 
-  <div class="foot">Paper trading · Alpaca · refreshes every 15 s</div>
+  <div class="foot" id="foot">Paper trading · Alpaca · refreshes every 15 s</div>
 </main>
 <div class="upd" id="upd" onclick="window.location.reload()">New version ready · tap to update</div>
 <div class="toast" id="toast"></div>
@@ -2250,6 +2250,7 @@ function applySec() {
 }
 function setTab(t) {
   document.body.dataset.tab = t;
+  $("foot").textContent = t === "sg" ? "Tiger practice account (fake money) · prices from Yahoo, refreshed hourly" : "Paper trading · Alpaca · refreshes every 15 s";
   document.querySelectorAll("[data-tabbtn]").forEach(b => b.classList.toggle("on", b.dataset.tabbtn === t));
   try { localStorage.setItem(tabKey, t); } catch (_) {}
   applySec();
