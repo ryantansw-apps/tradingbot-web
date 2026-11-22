@@ -351,7 +351,7 @@
   <div class="card" data-tab="sg">
     <h2 data-card="basket">Baskets (your mini fund) <span><span class="demo-tag">PRACTICE</span> <span class="chev">▾</span></span></h2>
     <div class="cbody">
-    <div class="sub">Pick stocks from your Research list and how much of your money goes into each. One tap queues an order for every stock. You choose the stocks; this is a tool, not advice.</div>
+    <div class="sub">Pick stocks and how much of your money goes into each. "Add a stock" lists your Research list first, then the other most-traded stocks. One tap queues an order for every stock. You choose the stocks; this is a tool, not advice.</div>
     <div class="ord-f">
       <div><label for="bk-sel">Basket</label><select id="bk-sel"></select></div>
       <div><label for="bk-name">Name</label><input type="text" id="bk-name" maxlength="40" placeholder="SG banks and REITs" style="text-transform:none"></div>
@@ -831,7 +831,9 @@ const SGX_NAME = { ...Object.fromEntries(Object.entries(SGX_ALIAS).map(([n, c]) 
   "558.SI": "UMS", "AWX.SI": "AEM", "E28.SI": "Frencken", "5DD.SI": "Micro-Mech", "MZH.SI": "Nanofilm",
   "8AZ.SI": "Aztech", "544.SI": "CSE Global", "AJBU.SI": "Keppel DC REIT", "DCRU.SI": "Digital Core REIT",
   "ME8U.SI": "Mapletree Ind", "AWZ.SI": "Multi-Chem", "S69.SI": "Serial System", "I07.SI": "ISDN",
-  "S63.SI": "ST Engineering", "BN4.SI": "Keppel", "Z74.SI": "Singtel", "U96.SI": "Sembcorp", "V03.SI": "Venture" };
+  "S63.SI": "ST Engineering", "BN4.SI": "Keppel", "Z74.SI": "Singtel", "U96.SI": "Sembcorp", "V03.SI": "Venture",
+  "A17U.SI": "Ascendas REIT", "C38U.SI": "CapitaLand Integrated", "9CI.SI": "CapitaLand Investment", "N2IU.SI": "Mapletree Pan Asia",
+  "M44U.SI": "Mapletree Logistics" };
 const sgxLabel = (r) => SGX_NAME[r.symbol] || (r.name || r.symbol).split(" ")[0];
 const sgxSelKey = "tb_sgx_sel";
 let sgxSel = (() => { try { return localStorage.getItem(sgxSelKey) || ""; } catch (_) { return ""; } })();
@@ -1530,9 +1532,16 @@ function bkRender() {
   $("bk-sel").innerHTML = `<option value="">New basket</option>` + mine.map(b => `<option value="${b.id}"${b.id === bkCur.id ? " selected" : ""}>${esc(b.name)}</option>`).join("");
   $("bk-amt-lab").textContent = `Amount to invest (${bkMoney()})`;
   const have = new Set(bkCur.items.map(i => i.symbol));
-  const opts = bkStocks().filter(r => !have.has(r.symbol));
-  $("bk-add").innerHTML = `<option value="">${opts.length ? "Choose…" : "Add stocks in Research first"}</option>` +
-    opts.map(r => `<option value="${esc(r.symbol)}">${esc(sgxLabel(r))} (${esc(shortSym(r.symbol))})</option>`).join("");
+  // Add a stock: your Research list first, then every other stock on the most-traded list, A to Z, full names
+  const myRes = bkStocks().filter(r => !have.has(r.symbol)).map(r => r.symbol), mineSet = new Set(myRes);
+  const more = Object.values(bkUni).filter(u => u.in_pool !== false && u.market === mkt && u.currency === bkCcy() && u.price > 0
+    && !have.has(u.symbol) && !mineSet.has(u.symbol)).map(u => u.symbol);
+  const full = (sym) => String(sgxCache.res[sym]?.data?.name || bkUni[sym]?.name || sym).replace(/,?\s+(Limited|Ltd\.?|Inc\.?|Incorporated|Corporation|Corp\.?|plc|PLC)$/i, "").trim();
+  const optsOf = (syms) => syms.map(sy => [full(sy), sy]).sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([nm, sy]) => `<option value="${esc(sy)}">${esc(nm)} (${esc(shortSym(sy))})</option>`).join("");
+  $("bk-add").innerHTML = `<option value="">${myRes.length + more.length ? "Choose…" : "Loading stocks…"}</option>` +
+    (myRes.length ? `<optgroup label="Your Research list">${optsOf(myRes)}</optgroup>` : "") +
+    (more.length ? `<optgroup label="Other most-traded ${mkt === "US" ? "US" : "SGX"} stocks">${optsOf(more)}</optgroup>` : "");
   const plan = bkPlan();
   $("bk-rows").innerHTML = plan.map((r, i) => `<div class="bk-row">
       <div><b>${esc(r.d ? r.d.name : r.symbol)}</b> <span class="sub">${esc(shortSym(r.symbol))}</span>
