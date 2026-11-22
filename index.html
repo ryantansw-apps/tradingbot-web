@@ -24,7 +24,10 @@
       --accent: #4c9aff; --sa: env(safe-area-inset-top);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-    html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 15px; overflow-x: hidden; overscroll-behavior-y: contain; /* no pull-down-to-reload: use the Reload button */ }
+    html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 15px; overflow-x: hidden; }
+    /* No pull-down-to-reload (use the Reload button). On html ONLY: body is a scroll container here
+       (overflow-x: hidden), and "contain" on it stops the page from scrolling at all. */
+    html { overscroll-behavior-y: contain; }
     .rl { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: 12.5px; font-weight: 600; }
     header { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line); padding: calc(10px + var(--sa)) 16px 10px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; }
     .tabs { flex-basis: 100%; display: flex; gap: 8px; margin-top: 10px; }
