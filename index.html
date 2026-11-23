@@ -942,7 +942,7 @@ function renderSgx() {
 
   const row = sgxCache.res[sgxSel];
   const wlRow = sgxCache.wl.find(r => r.symbol === sgxSel);
-  $("sgx-asof").textContent = row ? "updated " + ago(row.updated_at) : "";
+  $("sgx-asof").textContent = row ? (row.data?.price_at ? "price " + ago(row.data.price_at) : "updated " + ago(row.updated_at)) : "";
   if (!sgxSel) { $("sgx-detail").innerHTML = ""; return; }
   if (wlRow && wlRow.status === "invalid") { $("sgx-detail").innerHTML = `<div class="empty">⚠ ${esc(sgxSel)}: no data for this code. Check the ${sgxSel.endsWith(".SI") ? "SGX code" : "ticker"} and re-add it.</div>`; return; }
   if (!row) { $("sgx-detail").innerHTML = `<div class="empty">Finding data for ${esc(sgxSel)}… it appears after the next hourly refresh (weekdays, 9:30am to 5:30pm and 9:30pm to 4:30am SG time).</div>`; return; }
@@ -954,7 +954,7 @@ function renderSgx() {
 function sgxDetail(d) {
   sgxCur = d.currency === "USD" ? "US$" : "S$";
   const chg = d.prev_close ? d.price / d.prev_close - 1 : null;
-  const stale = (Date.now() - new Date(d.as_of)) / 36e5 > 30;
+  const figH = (Date.now() - new Date(d.as_of)) / 36e5;   // company figures (P/E, analysts...) come from the hourly job
   const fac = (d.factors || []).map(f => `<div class="fac"><span class="sg ${f.sign === "+" ? "p" : f.sign === "-" ? "m" : ""}">${f.sign === "=" ? "•" : f.sign}</span><span>${esc(f.text)}</span></div>`).join("")
     || `<div class="empty">Nothing stands out right now.</div>`;
   const p = d.peers || {}, mk = d.market || {};
@@ -1029,7 +1029,7 @@ function sgxDetail(d) {
 
   return `<div class="sgx-h"><div class="nm">${esc(d.name)} <span class="sub">${esc(d.symbol)}</span></div>
       <div class="px">${sgd(d.price)} <span class="${cls(chg)}" style="font-size:14px">${chg == null ? "" : signed(chg * 100, 2, true)}</span></div>
-      <div class="sub">${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${stale ? ` · <span class="warn">data ${ago(d.as_of)}, may be stale</span>` : ""}</div></div>
+      <div class="sub">${d.price_at ? `price read ${esc(pxWhen(d.price_at))}${d.currency === "USD" ? "" : " (SGX about 10 min late)"} · ` : ""}${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${figH > 96 ? ` · <span class="warn">company figures ${ago(d.as_of)} old</span>` : ""}</div></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
@@ -2301,6 +2301,13 @@ async function drawChart(id, sym) {
   if (typeof LightweightCharts === "undefined") { el.innerHTML = `<div class="empty">Chart library did not load.</div>`; return; }
   let bars;
   try { bars = await getBars(sym); } catch (_) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; return; }
+  const live = sgxCache.res[sym]?.data;   // today's session so far, from the 5-minute price job
+  if (bars.length && live && live.day && live.day_open && live.price) {
+    const today = [live.day, live.day_open, Math.max(live.day_high, live.price), Math.min(live.day_low, live.price), live.price, live.day_volume || 0];
+    const lastDay = bars[bars.length - 1][0];
+    if (live.day > lastDay) bars = bars.concat([today]);
+    else if (live.day === lastDay) bars = bars.slice(0, -1).concat([today]);
+  }
   if ($(id) !== el) return;   // card re-rendered while loading
   if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; return; }
   const n = (RANGES.find(r => r[0] === chartRng) || RANGES[1])[1];
