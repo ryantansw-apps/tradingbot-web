@@ -38,8 +38,9 @@
     .mktbar { margin-top: 6px; }
     .mktbar .tab { padding: 5px 0; font-size: 12px; }
     body:not([data-tab="sg"]) .mktbar { display: none; }
-    .secbar { margin-top: 6px; gap: 0; border-bottom: 1px solid var(--line); }
-    .secbar .tab { border: 0; border-radius: 0; background: transparent; padding: 7px 0 6px; font-size: 12.5px; border-bottom: 2px solid transparent; }
+    .secbar { margin-top: 6px; gap: 0; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+    .secbar::-webkit-scrollbar { display: none; }
+    .secbar .tab { flex: 1 0 auto; border: 0; border-radius: 0; background: transparent; padding: 7px 9px 6px; font-size: 12.5px; border-bottom: 2px solid transparent; }
     .secbar .tab.on { background: transparent; color: var(--text); border-bottom-color: var(--accent); }
     main .card.sec-off { display: none !important; }
     .itabs { display: flex; gap: 6px; overflow-x: auto; margin: 12px 0 2px; padding-bottom: 2px; scrollbar-width: none; }
@@ -1050,7 +1051,7 @@ function sgxDetail(d) {
 
   return `<div class="sgx-h"><div class="nm">${esc(d.name)} <span class="sub">${esc(d.symbol)}</span></div>
       <div class="px">${sgd(d.price)} <span class="${cls(chg)}" style="font-size:14px">${chg == null ? "" : signed(chg * 100, 2, true)}</span></div>
-      <div class="sub">${d.price_at ? `price read ${esc(pxWhen(d.price_at))}${d.currency === "USD" ? "" : " (SGX about 10 min late)"} · ` : ""}${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${figH > 96 ? ` · <span class="warn">company figures ${ago(d.as_of)} old</span>` : ""}</div></div>
+      <div class="sub">${d.price_at ? `price read ${esc(pxWhen(d.price_at))}${d.currency === "USD" ? "" : " (SGX about 10 min late)"} · ` : ""}${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${d.div_yield != null ? ` · <b>dividend yield ${fmt(d.div_yield, 2)}%</b>` : ""}${figH > 96 ? ` · <span class="warn">company figures ${ago(d.as_of)} old</span>` : ""}</div></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
@@ -1342,16 +1343,16 @@ async function ordReview() {
 // list + the market ETF), refreshed by the laptop every 5 minutes in market
 // hours (scripts/price_refresh.py). Read here about once a minute.
 const PB_SHOW = [["all", "All"], ["mine", "★ Mine"]];
-const PB_SORT = [["chg", "Biggest rise"], ["fall", "Biggest fall"], ["val", "Most traded"], ["az", "A to Z"]];
+const PB_SORT = [["chg", "Biggest rise"], ["fall", "Biggest fall"], ["div", "Highest dividend"], ["val", "Most traded"], ["az", "A to Z"]];
 let pbRows = [], pbAt = 0, pbOpen = "", pbHtml = "";
 const pbPref = (k, d, ok) => { try { const v = localStorage.getItem(k); return ok.some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
 let pbShow = pbPref("tb_pb_show", "all", PB_SHOW), pbSort = pbPref("tb_pb_sort", "chg", PB_SORT);
 function pbSet(k, v) { if (k === "show") pbShow = v; else pbSort = v; try { localStorage.setItem("tb_pb_" + k, v); } catch (_) {} pbRender(); }
 async function loadBoard(force) {
-  if (document.body.dataset.tab !== "sg" || curSec("sg") !== "Market") return;
+  if (document.body.dataset.tab !== "sg" || curSec("sg") !== "Prices") return;
   if (!force && Date.now() - pbAt < 55000 && pbRows.length) return;
   pbAt = Date.now();
-  const { data, error } = await sb.from("tb_universe").select("symbol,market,name,currency,price,price_at,quote,avg_value,in_pool");
+  const { data, error } = await sb.from("tb_universe").select("symbol,market,name,currency,price,price_at,quote,avg_value,in_pool,div_yield");
   if (error) { if (!pbRows.length) $("pb-list").innerHTML = `<div class="empty">Could not load prices.</div>`; return; }
   pbRows = data || [];
   pbRender();
@@ -1372,7 +1373,8 @@ function pbRender() {
   let list = rows.filter(r => r.u.symbol !== bench && (pbShow === "all" || r.mine));
   if (find) list = list.filter(r => r.nm.toLowerCase().includes(find) || shortSym(r.u.symbol).toLowerCase().includes(find));
   const by = { chg: (a, c) => (c.chg ?? -9) - (a.chg ?? -9), fall: (a, c) => (a.chg ?? 9) - (c.chg ?? 9),
-    val: (a, c) => Number(c.u.avg_value || 0) - Number(a.u.avg_value || 0), az: (a, c) => a.nm.localeCompare(c.nm) };
+    val: (a, c) => Number(c.u.avg_value || 0) - Number(a.u.avg_value || 0), az: (a, c) => a.nm.localeCompare(c.nm),
+    div: (a, c) => Number(c.u.div_yield || 0) - Number(a.u.div_yield || 0) };
   list.sort(by[pbSort]);
   const c = mkt === "US" ? "US$" : "S$", stocks = rows.filter(r => r.u.symbol !== bench);
   const up = stocks.filter(r => r.chg >= 5e-5).length, dn = stocks.filter(r => r.chg <= -5e-5).length;
@@ -1385,7 +1387,7 @@ function pbRender() {
     const lo = Math.min(q.day_low ?? r.px, r.px), hi = Math.max(q.day_high ?? r.px, r.px), at = hi > lo ? (r.px - lo) / (hi - lo) * 100 : 50;
     const vol = (v) => v == null ? "—" : v >= 1e6 ? fmt(v / 1e6, 1) + "m" : v >= 1e3 ? fmt(v / 1e3, 0) + "k" : fmt(v, 0);
     return `<div class="pb-row" onclick="pbToggle('${esc(r.u.symbol)}')">
-      <div style="min-width:0"><div class="nm">${esc(r.nm)}${r.mine ? " ★" : ""}</div><div class="sub">${esc(shortSym(r.u.symbol))}${q.day_low != null ? `<div class="pb-rng"><i style="left:calc(${at.toFixed(0)}% - 1px)"></i></div>` : ""}</div></div>
+      <div style="min-width:0"><div class="nm">${esc(r.nm)}${r.mine ? " ★" : ""}</div><div class="sub">${esc(shortSym(r.u.symbol))}${Number(r.u.div_yield) > 0 ? ` · yield ${fmt(r.u.div_yield, 1)}%` : ""}${q.day_low != null ? `<div class="pb-rng"><i style="left:calc(${at.toFixed(0)}% - 1px)"></i></div>` : ""}</div></div>
       <div class="px">${c}${fmt(r.px, dp)}</div>
       <div class="ch ${r.chg == null || Math.abs(r.chg) < 5e-5 ? "" : cls(r.chg)}">${r.chg == null ? "—" : Math.abs(r.chg) < 5e-5 ? "0.00%" : signed(r.chg * 100, 2, true)}</div>
       ${open ? `<div class="pb-more">Previous close ${q.prev_close ? c + fmt(q.prev_close, dp) : "—"} · opened ${q.day_open ? c + fmt(q.day_open, dp) : "—"} · day range ${q.day_low != null ? fmt(q.day_low, dp) + " to " + fmt(q.day_high, dp) : "—"} · shares traded ${vol(q.day_volume)} · read ${esc(pxWhen(r.u.price_at))}${r.mine ? `<br><a href="#" style="color:var(--accent)" onclick="event.preventDefault(); event.stopPropagation(); selSgx('${esc(r.u.symbol)}'); setSec('Research')">Open in Research ›</a>` : ""}</div>` : ""}
@@ -1393,7 +1395,7 @@ function pbRender() {
   };
   const h = list.length ? list.map(row).join("") : `<div class="empty">${find ? "No stock matches." : pbShow === "mine" ? "Your Research list has no stocks in this market." : "No prices yet."}</div>`;
   if (h !== pbHtml) { pbHtml = h; box.innerHTML = h; }
-  $("pb-note").textContent = `${mkt === "US" ? "US prices are near live" : "SGX prices run about 10 minutes late"}, refreshed every 5 minutes while the market is open. The line under each name shows where the price sits in today's range (left = day low, right = day high). ★ = on your Research list. For the exact live price, use the Tiger app.`;
+  $("pb-note").textContent = `${mkt === "US" ? "US prices are near live" : "SGX prices run about 10 minutes late"}, refreshed every 5 minutes while the market is open. The line under each name shows where the price sits in today's range (left = day low, right = day high). ★ = on your Research list. Yield = dividends paid over the past year against today's price. For the exact live price, use the Tiger app.`;
 }
 function pbToggle(sym) { pbOpen = pbOpen === sym ? "" : sym; pbHtml = ""; pbRender(); }
 $("pb-find").addEventListener("input", () => pbRender());
@@ -2461,7 +2463,7 @@ const tabKey = "tb_tab";
 // Section tabs: one group of cards at a time instead of one long scroll.
 const SECTIONS = {
   us: [["Overview", ["pnl", "perf", "uschart"]], ["Trades", ["positions", "signals", "trades"]], ["Watchlist", ["watchlist"]], ["Controls", ["controls"]]],
-  sg: [["Market", ["prices", "market"]], ["Research", ["sgx"]], ["Compare", ["sgxcmp"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Holdings", ["holdings"]]],
+  sg: [["Prices", ["prices"]], ["Market", ["market"]], ["Research", ["sgx"]], ["Compare", ["sgxcmp"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Holdings", ["holdings"]]],
 };
 const secKey = (t) => "tb_sec_" + t;
 const curSec = (t) => { const d = SECTIONS[t][0][0]; try { const v = localStorage.getItem(secKey(t)); return SECTIONS[t].some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
@@ -2478,6 +2480,7 @@ function applySec() {
     c.classList.toggle("sec-off", mine === t && !!h && !ids.has(h.dataset.card));
   });
   $("secbar").innerHTML = SECTIONS[t].map(([n]) => `<div class="tab ${n === sec ? "on" : ""}" onclick="setSec('${n}')">${n}</div>`).join("");
+  const onTab = $("secbar").querySelector(".tab.on"); if (onTab) onTab.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (t === "sg" && sec === "Baskets" && bkChart) { const el = $("pf-chart"); if (el && el.clientWidth) bkChart.applyOptions({ width: el.clientWidth }); }
 }
 function setTab(t) {
