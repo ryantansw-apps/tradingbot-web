@@ -136,7 +136,9 @@
     .bk-ct { font-size: 12.5px; }
     .bk-ct td, .bk-ct th { padding: 7px 3px; }
     .bk-ct tr { cursor: pointer; }
-    .bk-ct tr.cur td { background: rgba(76,154,255,.12); }
+    .bk-ct .cur td { background: rgba(76,154,255,.12); }
+    .bk-ct .idea tr:first-child td { border-bottom: 0; padding-bottom: 1px; }
+    .bk-ct .idea tr + tr td { padding-top: 0; }
     .bk-ct .x { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--line); font-size: 11px; font-weight: 400; }
     .upd { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 30; background: var(--accent); color: #041022; font-weight: 700; font-size: 13px; padding: 10px 16px; border-radius: 999px; cursor: pointer; white-space: nowrap; display: none; }
     .pf-rt { margin-top: 6px; font-size: 13px; }
@@ -421,7 +423,7 @@
     <button id="bk-gen" style="width:100%;margin-top:8px">Generate idea</button>
     <div class="bk-nav" id="bk-nav" style="display:none">
       <button class="ghost" id="bk-prev" aria-label="Previous idea">◀</button>
-      <div id="bk-pos"></div>
+      <select id="bk-pick" aria-label="Open one of your ideas" style="width:100%;min-width:0;font-size:13px;padding:9px 8px"></select>
       <button class="ghost" id="bk-next" aria-label="Next idea">▶</button>
     </div>
     <div class="sub" id="bk-gen-note" style="margin-top:6px"></div>
@@ -1693,21 +1695,44 @@ let bkStore = (() => {
 })();
 ["SG", "US"].forEach(m => { bkStore.ideas[m] = bkStore.ideas[m] || []; if (bkStore.idx[m] == null) bkStore.idx[m] = -1; });
 bkStore.cur = bkStore.cur || {}; bkStore.amt = bkStore.amt || {};
+// an idea is named after the style that made it; the industry split is shown under the name instead
+const BK_SHORT = { traded: "Most-traded", steady: "Steady", lowbeta: "Low-beta", trend: "Trend", income: "Income", value: "Value" };
+const bkIdeaName = (m, style, n) => `${m} ${BK_SHORT[style] || "Idea"} mix #${n}`;
+const bkKey = (items) => items.map(x => x.symbol + ":" + (Number(x.weight) || 0)).sort().join(",");
+// Tidy what is kept on this phone: older names called nearly every mix "Property-Tilted Defensive",
+// and Generate could keep the very same mix twice (same stocks, same weights): keep the first of each
+["SG", "US"].forEach(m => {
+  const old = /^(?:SG|US) (?:.+-Tilted|Diversified)(?: Defensive| Steady| Core| Growth)? #(\d+)$/, seen = {}, map = [], out = [];
+  bkStore.ideas[m].forEach((it, i) => {
+    const k = bkKey(it.items || []);
+    if (seen[k] != null) { map[i] = seen[k]; return; }
+    const hit = old.exec(it.name || ""); if (hit) it.name = bkIdeaName(m, it.style, hit[1]);
+    seen[k] = map[i] = out.length; out.push(it);
+  });
+  bkStore.ideas[m] = out;
+  const fix = (i) => i != null && i >= 0 && map[i] != null ? map[i] : i;
+  bkStore.idx[m] = fix(bkStore.idx[m]);
+  const c = bkStore.cur[m]; if (c && c.idea != null) c.idea = fix(c.idea);
+});
 const bkIdeasOf = () => bkStore.ideas[mkt];
 let bkMktShown = null;
 function bkPersist() {
   const list = bkIdeasOf(), i = bkStore.idx[mkt], items = bkCur.items.map(x => ({ symbol: x.symbol, weight: Number(x.weight) || 0 }));
   const nm = $("bk-name").value.trim();
-  if (bkCur.idea != null && bkCur.idea === i && list[i]) { list[i].items = items.map(x => ({ ...x })); if (nm) list[i].name = nm; }
+  if (bkCur.idea != null && bkCur.idea === i && list[i]) { list[i].items = items.map(x => ({ ...x })); if (nm) list[i].name = nm;
+    const o = $("bk-pick").selectedOptions[0]; if (o && o.value === String(i)) o.innerHTML = bkOptText(list[i]); }
   bkStore.cur[mkt] = { id: bkCur.id ?? null, name: nm, items, idea: bkCur.idea ?? null };
   bkStore.amt[mkt] = $("bk-amt").value; bkStore.n = $("bk-n").value; bkStore.style = $("bk-style").value; bkStore.wt = $("bk-wt").value;
   try { localStorage.setItem(BK_KEY, JSON.stringify(bkStore)); } catch (_) {}
   bkCompareSoon();
 }
+const bkOptText = (it) => `${esc(it.name)} · ${it.items.map(x => esc(shortSym(x.symbol))).join(" ")}`;
 function bkNav() {
   const list = bkIdeasOf(), i = bkStore.idx[mkt], on = bkCur.idea != null && !!list[bkCur.idea];
   $("bk-nav").style.display = list.length ? "" : "none";
-  $("bk-pos").textContent = on ? `Idea ${i + 1} of ${list.length}` : `${list.length} idea${list.length === 1 ? "" : "s"} kept · ◀ to open`;
+  $("bk-pick").innerHTML = (on ? "" : `<option value="">${list.length} idea${list.length === 1 ? "" : "s"} kept · choose one</option>`) +
+    list.map((it, k) => `<option value="${k}">${bkOptText(it)}</option>`).reverse().join("");   // newest first
+  $("bk-pick").value = on ? String(i) : "";
   $("bk-prev").disabled = on && i <= 0; $("bk-next").disabled = !on || i >= list.length - 1;
 }
 // Put back what was on screen for this market: the idea or basket, amount and choices
@@ -1745,13 +1770,20 @@ async function bkClearIdeas() {
   bkNav(); bkRender();
 }
 // Side-by-side table of every kept idea (last year, saved weights) + the market
-let bkCmpT = null, bkCmpSig = "";
+let bkCmpT = null, bkCmpSig = "", bkCmpAll = false;
+function bkCmpToggle() { bkCmpAll = !bkCmpAll; bkCompare(); }
+// "Property 40% · Finance 20% · ..." for a mix, biggest first
+function bkMix(items) {
+  const w = {}; let tot = 0;
+  items.forEach(it => { const x = Number(it.weight) || 0, k = secShort(bkUni[it.symbol]?.sector || bkData(it.symbol)?.sector); w[k] = (w[k] || 0) + x; tot += x; });
+  return tot ? Object.entries(w).sort((a, b) => b[1] - a[1]).map(([k, x]) => `${esc(k)} ${Math.round(x / tot * 100)}%`).join(" · ") : "";
+}
 function bkCompareSoon() { clearTimeout(bkCmpT); bkCmpT = setTimeout(bkCompare, 400); }
 async function bkCompare() {
   const box = $("bk-cmp"); if (!box) return;
   const list = bkIdeasOf(), m0 = mkt;
   if (list.length < 2) { box.innerHTML = ""; bkCmpSig = ""; return; }
-  const sig = JSON.stringify([m0, bkCur.idea ?? -1, Object.keys(bkUni).length, list.map(it => [it.name, it.items])]);
+  const sig = JSON.stringify([m0, bkCur.idea ?? -1, bkCmpAll, Object.keys(bkUni).length, list.map(it => [it.name, it.items])]);
   if (sig === bkCmpSig && box.innerHTML) return;
   const bench = m0 === "US" ? "SPY" : "ES3.SI", bshort = m0 === "US" ? "S&P 500" : "STI";
   if (!await needHist([...new Set(list.flatMap(it => it.items.map(x => x.symbol))), bench])) return;
@@ -1759,22 +1791,27 @@ async function bkCompare() {
   const bh = bkHist[bench];
   const c = (x) => x == null ? "—" : `<span class="${x >= 0 ? "up" : "down"}">${x >= 0 ? "+" : ""}${pfPct(x, 0)}</span>`;
   let bst = null;
-  const rows = list.map((it, i) => {
+  const CAP = 5, newest = list.map((it, i) => i).reverse();
+  const show = bkCmpAll ? newest : newest.filter((i, k) => k < CAP || i === bkCur.idea);
+  const rows = show.map(i => {
+    const it = list[i];
     const H = it.items.filter(x => Number(x.weight) > 0 && Array.isArray(bkHist[x.symbol]) && bkHist[x.symbol].length >= 60);
     const st = H.length && Array.isArray(bh) ? calcStats(H.map(x => bkHist[x.symbol]), H.map(x => Number(x.weight)), bh) : null;
     if (st && !bst) bst = st;
     let dv = 0, dw = 0;
     it.items.forEach(x => { const y = bkUni[x.symbol]?.div_yield; if (y != null) { dv += Number(x.weight) * Number(y); dw += Number(x.weight); } });
     return { i, it, st, dy: dw ? dv / dw : null };
-  }).reverse();
+  });
   box.innerHTML = `<div class="pf-sub">Compare your ideas (${list.length}) · tap one to open it</div>
     <table class="pf-rt bk-ct"><tr><th>Idea</th><th class="r">1 yr</th><th class="r">Swing</th><th class="r">Drop</th><th class="r">Beta</th><th class="r">Yield</th><th></th></tr>` +
-    rows.map(r => `<tr class="${bkCur.idea === r.i ? "cur" : ""}" onclick="bkShowIdea(${r.i})"><td>${esc(r.it.name)}<div class="sub">${r.it.items.map(x => esc(shortSym(x.symbol))).join(" ")}</div></td>
+    rows.map(r => `<tbody class="idea ${bkCur.idea === r.i ? "cur" : ""}" onclick="bkShowIdea(${r.i})"><tr><td>${esc(r.it.name)}</td>
       <td class="r">${r.st ? c(r.st.ret) : "—"}</td><td class="r">${r.st ? pfPct(r.st.vol, 0) : "—"}</td><td class="r">${r.st ? `<span class="down">${pfPct(r.st.dd, 0)}</span>` : "—"}</td><td class="r">${r.st ? pfNum(r.st.beta, 2) : "—"}</td>
       <td class="r">${r.dy == null ? "—" : fmt(r.dy, 1) + "%"}</td>
-      <td class="r"><span class="x" onclick="event.stopPropagation(); bkDelIdea(${r.i})" aria-label="Delete this idea">✕</span></td></tr>`).join("") +
+      <td class="r"><span class="x" onclick="event.stopPropagation(); bkDelIdea(${r.i})" aria-label="Delete this idea">✕</span></td></tr>
+      <tr><td colspan="7"><div class="sub">${r.it.items.map(x => esc(shortSym(x.symbol))).join(" ")}</div><div class="sub">${bkMix(r.it.items)}</div></td></tr></tbody>`).join("") +
     (bst ? `<tr style="cursor:default"><td class="sub">${esc(bshort)} (the market)</td><td class="r">${c(bst.bret)}</td><td class="r">${pfPct(bst.bvol, 0)}</td><td class="r"><span class="down">${pfPct(bst.bdd, 0)}</span></td><td class="r">1.00</td><td class="r">—</td><td></td></tr>` : "") +
-    `</table><div class="sub" style="margin-top:6px">Last year with dividends, each idea at its own weights. Swing = yearly volatility, Drop = worst fall from a high, Beta = how much it moved when the market moved 1%. Ideas stay on this phone until you delete them. <a href="#" style="color:var(--accent)" onclick="event.preventDefault(); bkClearIdeas()">Delete all</a></div>`;
+    `</table>` + (list.length > CAP ? `<div class="pb-all" onclick="bkCmpToggle()">${bkCmpAll ? `Show the newest ${CAP} only` : `Show all ${list.length}`}</div>` : "") +
+    `<div class="sub" style="margin-top:6px">Last year with dividends, each idea at its own weights. Swing = yearly volatility, Drop = worst fall from a high, Beta = how much it moved when the market moved 1%. Under each name: its stocks, then how the money is split by industry. The newest 40 ideas stay on this phone until you delete them. <a href="#" style="color:var(--accent)" onclick="event.preventDefault(); bkClearIdeas()">Delete all</a></div>`;
   bkCmpSig = sig;
 }
 // Yahoo sector names -> the usual (GICS-style) names, plus a short form for basket names
@@ -1791,18 +1828,6 @@ const SEC_COL = { "Technology": "#2a78d6", "Consumer Staples": "#1baf7a", "Consu
   "Financials": "#6250d6", "Communication Services": "#e87ba4", "Health Care": "#e34948", "Real Estate": "#eda100",
   "Industrials": "#8a97a6", "Energy": "#b3541e", "Utilities": "#008300", "Materials": "#9085e9" };
 const secCol = (n) => SEC_COL[n] || "#5f6b7a";
-// a short descriptive name from the mix: market + tilt + risk style (beta)
-function bkAutoName(items, n) {
-  const w = {}; let tot = 0, bsum = 0, bw = 0;
-  items.forEach(it => { const u = bkUni[it.symbol], x = Number(it.weight) || 1; tot += x;
-    const k = u?.sector || bkData(it.symbol)?.sector; w[k] = (w[k] || 0) + x;
-    if (u && u.beta != null) { bsum += x * Number(u.beta); bw += x; } });
-  const top = Object.entries(w).sort((a, b) => b[1] - a[1])[0];
-  const tilt = top && top[1] / tot >= 0.4 ? `${secShort(top[0])}-Tilted` : "Diversified";
-  const beta = bw ? bsum / bw : null;
-  const style = beta == null ? "" : beta < 0.6 ? " Defensive" : beta < 0.9 ? " Steady" : beta < 1.2 ? " Core" : " Growth";
-  return `${mkt} ${tilt}${style} #${n}`.slice(0, 40);
-}
 function bkShowIdea(i) {
   const list = bkIdeasOf();
   if (i < 0 || i >= list.length) return;
@@ -1865,29 +1890,32 @@ function bkGenerate() {
   // 1 share must fit in an equal slot of the amount
   const fit = (u) => !(amt > 0) || bkLimit(Number(u.price)) <= amt / n;
   const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-  let pool;
-  if (!metric) pool = shuffle(ranked.slice(0, 30).filter(fit));
-  else {
-    const byM = ranked.filter(u => metric(u) != null && fit(u)).sort((a, b) => hiGood ? metric(b) - metric(a) : metric(a) - metric(b));
-    pool = shuffle(byM.slice(0, 12)).concat(byM.slice(12));   // the best dozen in random order, then the rest in rank order
+  const byM = metric ? ranked.filter(u => metric(u) != null && fit(u)).sort((a, b) => hiGood ? metric(b) - metric(a) : metric(a) - metric(b)) : null;
+  const list = bkIdeasOf(), have = list.map(it => bkKey(it.items));
+  let picked, items, dup = -1;
+  for (let t = 0; t < 12; t++) {   // a mix you already keep is drawn again, up to 12 times
+    // the best dozen in random order, then the rest in rank order (most traded: the top 30 at random)
+    const pool = byM ? shuffle(byM.slice(0, 12)).concat(byM.slice(12)) : shuffle(ranked.slice(0, 30).filter(fit));
+    const per = {}; picked = [];
+    for (const u of pool) {
+      const k = u.sector || "Other";
+      if ((per[k] || 0) >= 2) continue;
+      per[k] = (per[k] || 0) + 1; picked.push(u);
+      if (picked.length === n) break;
+    }
+    if (!picked.length) return toast(`No stock in this style fits ${bkMoney()}${fmt(amt / n, 0)} per stock. Raise the amount or pick fewer stocks.`);
+    picked.sort((a, b) => b.avg_value - a.avg_value);
+    items = picked.map(u => ({ symbol: u.symbol, weight: 0 }));
+    bkWeightsFor(items);
+    dup = have.indexOf(bkKey(items));
+    if (dup < 0) break;
   }
-  const per = {}, picked = [];
-  for (const u of pool) {
-    const k = u.sector || "Other";
-    if ((per[k] || 0) >= 2) continue;
-    per[k] = (per[k] || 0) + 1; picked.push(u);
-    if (picked.length === n) break;
-  }
-  if (!picked.length) return toast(`No stock in this style fits ${bkMoney()}${fmt(amt / n, 0)} per stock. Raise the amount or pick fewer stocks.`);
-  picked.sort((a, b) => b.avg_value - a.avg_value);
+  if (dup >= 0) { bkShowIdea(dup); return toast("No new mix left for this style: opened the one you already have. Try another style or number of stocks."); }
   bkStore.no = (bkStore.no || 0) + 1;
-  const items = picked.map(u => ({ symbol: u.symbol, weight: 0 }));
-  bkWeightsFor(items);
   const note = `Picked ${metric ? "from" : "at random from"} ${what} among well-traded ${mkt === "US" ? "US" : "SGX"} stocks, at most 2 per industry` +
     (amt > 0 ? `, only stocks where 1 share fits ${bkMoney()}${fmt(amt / n, 0)}` : "") + `. Press Generate again for another mix; ◀ ▶ flips between your ideas. An idea from a rule, not advice.` +
     (picked.length < n ? ` <span class="warn">Only ${picked.length} fit: raise the amount or pick fewer stocks.</span>` : "");
-  const list = bkIdeasOf();
-  list.push({ name: bkAutoName(items, bkStore.no), items, note, style, at: Date.now() });
+  list.push({ name: bkIdeaName(mkt, style, bkStore.no), items, note, style, at: Date.now() });
   if (list.length > 40) list.splice(0, list.length - 40);     // keep the latest 40 per market
   bkShowIdea(list.length - 1);
 }
@@ -2416,6 +2444,7 @@ async function bkBuy() {
 $("bk-sel").onchange = bkPick; $("bk-gen").onclick = bkGenerate;
 $("bk-prev").onclick = () => bkShowIdea(bkCur.idea != null ? bkStore.idx[mkt] - 1 : bkIdeasOf().length - 1);
 $("bk-next").onclick = () => bkShowIdea(bkStore.idx[mkt] + 1);
+$("bk-pick").onchange = () => { const v = $("bk-pick").value; if (v !== "") bkShowIdea(Number(v)); };
 $("bk-name").oninput = bkPersist; $("bk-n").onchange = bkPersist; $("bk-style").onchange = bkPersist; $("bk-add").onchange = bkAdd; $("bk-wt").onchange = bkEven;
 $("bk-save").onclick = bkSave; $("bk-del").onclick = bkDelete; $("bk-buy").onclick = bkBuy;
 $("bk-amt").oninput = () => { bkSum(); bkRowText(); };
