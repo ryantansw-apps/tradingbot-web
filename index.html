@@ -77,6 +77,17 @@
     .pb-row .px { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
     .pb-row .ch { font-weight: 700; font-size: 12.5px; text-align: center; border-radius: 6px; padding: 4px 0; font-variant-numeric: tabular-nums; background: var(--panel2); }
     .pb-row .ch.up { background: rgba(35,196,122,.16); } .pb-row .ch.down { background: rgba(255,92,92,.16); }
+    .pb-all { padding: 10px 0; text-align: center; color: var(--accent); font-weight: 600; font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--line); }
+    .pb-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin-top: 16px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+    .pb-h b { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+    .pb-g { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+    .pb-g .nm { font-weight: 700; font-size: 14px; } .pb-g .nm i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; }
+    .pb-g .ch { font-weight: 700; font-size: 12.5px; text-align: center; border-radius: 6px; padding: 4px 0; font-variant-numeric: tabular-nums; background: var(--panel2); }
+    .pb-g .ch.up { background: rgba(35,196,122,.16); } .pb-g .ch.down { background: rgba(255,92,92,.16); }
+    .pb-rngw { display: flex; align-items: center; gap: 6px; max-width: 260px; margin-top: 4px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .pb-rngw .pb-rng { flex: 1; margin-top: 0; }
+    .pb-leg { display: inline-block; position: relative; width: 22px; height: 4px; background: var(--panel2); border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+    .pb-leg i { position: absolute; left: 13px; top: -3px; width: 2px; height: 10px; background: var(--text); border-radius: 1px; }
     .pb-rng { position: relative; height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 5px; }
     .pb-rng i { position: absolute; top: -3px; width: 2px; height: 10px; background: var(--text); border-radius: 1px; }
     .pb-more { grid-column: 1 / -1; font-size: 12px; color: var(--muted); padding: 2px 0 2px; }
@@ -305,10 +316,10 @@
   <div class="card" data-tab="sg">
     <h2 data-card="prices">All prices <span><span class="sub" id="pb-asof"></span> <span class="chev">▾</span></span></h2>
     <div class="cbody">
-      <div class="sub">Every stock this app tracks, with today's move. SG / US follows the switch at the top. Tap a stock for its day range.</div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><div class="chips" id="pb-show" style="margin-top:0;flex:1"></div>
-        <select id="pb-sort" aria-label="Sort the price list" style="padding:7px 8px;font-size:13px"></select></div>
-      <input type="text" id="pb-find" placeholder="Find a stock" autocomplete="off" style="width:100%;margin-top:8px;text-transform:none;padding:9px 12px;font-size:15px">
+      <div class="sub">Every stock this app tracks, in short groups. SG / US follows the switch at the top. Tap a stock for more.</div>
+      <div class="chips" id="pb-view" style="margin-top:8px"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><div class="chips" id="pb-show" style="margin-top:0;flex-wrap:nowrap"></div>
+        <input type="text" id="pb-find" placeholder="Find a stock" autocomplete="off" style="flex:1;min-width:0;text-transform:none;padding:8px 12px;font-size:15px"></div>
       <div id="pb-sum" class="sub" style="margin-top:8px"></div>
       <div id="pb-list" style="margin-top:4px"><div class="empty">Loading…</div></div>
       <div class="sub" style="margin-top:8px" id="pb-note"></div>
@@ -1342,17 +1353,20 @@ async function ordReview() {
 // ---- Prices board: every stock in tb_universe (most-traded pools + research
 // list + the market ETF), refreshed by the laptop every 5 minutes in market
 // hours (scripts/price_refresh.py). Read here about once a minute.
+// Shown as short grouped views instead of one long list.
 const PB_SHOW = [["all", "All"], ["mine", "★ Mine"]];
-const PB_SORT = [["chg", "Biggest rise"], ["fall", "Biggest fall"], ["div", "Highest dividend"], ["val", "Most traded"], ["az", "A to Z"]];
+const PB_VIEW = [["movers", "Movers"], ["ind", "Industries"], ["busy", "Busiest"], ["div", "Dividends"], ["hilo", "52-week"], ["all", "A to Z"]];
 let pbRows = [], pbAt = 0, pbOpen = "", pbHtml = "";
+const pbGrp = new Set();   // industries opened in the Industries view
+const pbAll = new Set();   // groups where "Show all" was tapped
 const pbPref = (k, d, ok) => { try { const v = localStorage.getItem(k); return ok.some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
-let pbShow = pbPref("tb_pb_show", "all", PB_SHOW), pbSort = pbPref("tb_pb_sort", "chg", PB_SORT);
-function pbSet(k, v) { if (k === "show") pbShow = v; else pbSort = v; try { localStorage.setItem("tb_pb_" + k, v); } catch (_) {} pbRender(); }
+let pbShow = pbPref("tb_pb_show", "all", PB_SHOW), pbView = pbPref("tb_pb_view", "movers", PB_VIEW);
+function pbSet(k, v) { if (k === "show") pbShow = v; else pbView = v; try { localStorage.setItem("tb_pb_" + k, v); } catch (_) {} pbRender(); }
 async function loadBoard(force) {
   if (document.body.dataset.tab !== "sg" || curSec("sg") !== "Prices") return;
   if (!force && Date.now() - pbAt < 55000 && pbRows.length) return;
   pbAt = Date.now();
-  const { data, error } = await sb.from("tb_universe").select("symbol,market,name,currency,price,price_at,quote,avg_value,in_pool,div_yield");
+  const { data, error } = await sb.from("tb_universe").select("symbol,market,name,sector,currency,price,price_at,quote,avg_value,avg_volume,in_pool,div_yield,hi52,lo52");
   if (error) { if (!pbRows.length) $("pb-list").innerHTML = `<div class="empty">Could not load prices.</div>`; return; }
   pbRows = data || [];
   pbRender();
@@ -1360,46 +1374,96 @@ async function loadBoard(force) {
 function pbRender() {
   const box = $("pb-list"); if (!box) return;
   $("pb-show").innerHTML = PB_SHOW.map(([k, n]) => `<div class="chip ${k === pbShow ? "sel" : ""}" style="padding:6px 12px" onclick="pbSet('show','${k}')">${n}</div>`).join("");
-  if (!$("pb-sort").options.length) $("pb-sort").innerHTML = PB_SORT.map(([k, n]) => `<option value="${k}">${n}</option>`).join("");
-  $("pb-sort").value = pbSort;
+  $("pb-view").innerHTML = PB_VIEW.map(([k, n]) => `<div class="chip ${k === pbView ? "sel" : ""}" style="padding:6px 12px" onclick="pbSet('view','${k}')">${n}</div>`).join("");
   const bench = mkt === "US" ? "SPY" : "ES3.SI", mine = new Set(sgxCache.wl.filter(r => r.enabled).map(r => r.symbol));
   const find = ($("pb-find").value || "").trim().toLowerCase();
   const name = (u) => String(sgxCache.res[u.symbol]?.data?.name || u.name || u.symbol).replace(/,?\s+(Limited|Ltd\.?|Inc\.?|Incorporated|Corporation|Corp\.?|plc|PLC)$/i, "").trim();
   const rows = pbRows.filter(u => u.market === mkt && u.price > 0).map(u => {
     const q = u.quote || {}, pc = Number(q.prev_close) || null, px = Number(u.price);
-    return { u, q, px, nm: name(u), chg: pc ? px / pc - 1 : null, mine: mine.has(u.symbol) };
+    const hi = u.hi52 != null ? Math.max(Number(u.hi52), px) : null, lo = u.lo52 != null ? Math.min(Number(u.lo52), px) : null;
+    return { u, q, px, nm: name(u), chg: pc ? px / pc - 1 : null, mine: mine.has(u.symbol), sec: secName(u.sector),
+      rvol: q.day_volume > 0 && u.avg_volume > 0 ? q.day_volume / Number(u.avg_volume) : null, money: q.day_volume > 0 ? q.day_volume * px : null,
+      dy: Number(u.div_yield) > 0 ? Number(u.div_yield) : null, hi, lo, offHi: hi ? px / hi - 1 : null, offLo: lo ? px / lo - 1 : null };
   });
-  const b = rows.find(r => r.u.symbol === bench);
-  let list = rows.filter(r => r.u.symbol !== bench && (pbShow === "all" || r.mine));
-  if (find) list = list.filter(r => r.nm.toLowerCase().includes(find) || shortSym(r.u.symbol).toLowerCase().includes(find));
-  const by = { chg: (a, c) => (c.chg ?? -9) - (a.chg ?? -9), fall: (a, c) => (a.chg ?? 9) - (c.chg ?? 9),
-    val: (a, c) => Number(c.u.avg_value || 0) - Number(a.u.avg_value || 0), az: (a, c) => a.nm.localeCompare(c.nm),
-    div: (a, c) => Number(c.u.div_yield || 0) - Number(a.u.div_yield || 0) };
-  list.sort(by[pbSort]);
-  const c = mkt === "US" ? "US$" : "S$", stocks = rows.filter(r => r.u.symbol !== bench);
+  const b = rows.find(r => r.u.symbol === bench), stocks = rows.filter(r => r.u.symbol !== bench);
+  const c = mkt === "US" ? "US$" : "S$", flat = (x) => x == null || Math.abs(x) < 5e-5;
   const up = stocks.filter(r => r.chg >= 5e-5).length, dn = stocks.filter(r => r.chg <= -5e-5).length;
   const newest = rows.map(r => r.u.price_at).filter(Boolean).sort().pop();
   $("pb-asof").textContent = newest ? "prices " + ago(newest) : "";
   $("pb-sum").innerHTML = (b && b.chg != null ? `Market (${mkt === "US" ? "S&amp;P 500 ETF" : "STI ETF"}) <b class="${cls(b.chg)}">${signed(b.chg * 100, 2, true)}</b> · ` : "") +
     `<span class="up">${up} up</span> · <span class="down">${dn} down</span> · ${stocks.length - up - dn} unchanged, of ${stocks.length} stocks`;
-  const row = (r) => {
+  const vol = (v) => v == null ? "—" : v >= 1e9 ? fmt(v / 1e9, 1) + "b" : v >= 1e6 ? fmt(v / 1e6, 1) + "m" : v >= 1e3 ? fmt(v / 1e3, 0) + "k" : fmt(v, 0);
+  const pct = (x, d = 2) => flat(x) ? "0.00%" : signed(x * 100, d, true);
+  // one stock row; `note` is the line that explains why it is in this group
+  const row = (r, note) => {
     const dp = r.px < 1 ? 3 : 2, q = r.q, open = pbOpen === r.u.symbol;
     const lo = Math.min(q.day_low ?? r.px, r.px), hi = Math.max(q.day_high ?? r.px, r.px), at = hi > lo ? (r.px - lo) / (hi - lo) * 100 : 50;
-    const vol = (v) => v == null ? "—" : v >= 1e6 ? fmt(v / 1e6, 1) + "m" : v >= 1e3 ? fmt(v / 1e3, 0) + "k" : fmt(v, 0);
+    const rng = q.day_low != null ? `<div class="pb-rngw"><span>${fmt(lo, dp)}</span><div class="pb-rng"><i style="left:calc(${at.toFixed(0)}% - 1px)"></i></div><span>${fmt(hi, dp)}</span></div>` : "";
     return `<div class="pb-row" onclick="pbToggle('${esc(r.u.symbol)}')">
-      <div style="min-width:0"><div class="nm">${esc(r.nm)}${r.mine ? " ★" : ""}</div><div class="sub">${esc(shortSym(r.u.symbol))}${Number(r.u.div_yield) > 0 ? ` · yield ${fmt(r.u.div_yield, 1)}%` : ""}${q.day_low != null ? `<div class="pb-rng"><i style="left:calc(${at.toFixed(0)}% - 1px)"></i></div>` : ""}</div></div>
+      <div style="min-width:0"><div class="nm">${esc(r.nm)}${r.mine ? " ★" : ""}</div><div class="sub">${esc(shortSym(r.u.symbol))}${note ? " · " + note : ""}</div>${rng}</div>
       <div class="px">${c}${fmt(r.px, dp)}</div>
-      <div class="ch ${r.chg == null || Math.abs(r.chg) < 5e-5 ? "" : cls(r.chg)}">${r.chg == null ? "—" : Math.abs(r.chg) < 5e-5 ? "0.00%" : signed(r.chg * 100, 2, true)}</div>
-      ${open ? `<div class="pb-more">Previous close ${q.prev_close ? c + fmt(q.prev_close, dp) : "—"} · opened ${q.day_open ? c + fmt(q.day_open, dp) : "—"} · day range ${q.day_low != null ? fmt(q.day_low, dp) + " to " + fmt(q.day_high, dp) : "—"} · shares traded ${vol(q.day_volume)} · read ${esc(pxWhen(r.u.price_at))}${r.mine ? `<br><a href="#" style="color:var(--accent)" onclick="event.preventDefault(); event.stopPropagation(); selSgx('${esc(r.u.symbol)}'); setSec('Research')">Open in Research ›</a>` : ""}</div>` : ""}
+      <div class="ch ${flat(r.chg) ? "" : cls(r.chg)}">${r.chg == null ? "—" : pct(r.chg)}</div>
+      ${open ? `<div class="pb-more">${esc(r.sec)} · previous close ${q.prev_close ? c + fmt(q.prev_close, dp) : "—"} · opened ${q.day_open ? c + fmt(q.day_open, dp) : "—"} · shares traded ${vol(q.day_volume)}${r.u.avg_volume ? " (usual full day " + vol(Number(r.u.avg_volume)) + ")" : ""}${r.hi ? ` · 52-week range ${fmt(r.lo, dp)} to ${fmt(r.hi, dp)}` : ""}${r.dy ? ` · dividend yield ${fmt(r.dy, 1)}%` : ""} · read ${esc(pxWhen(r.u.price_at))}${r.mine ? `<br><a href="#" style="color:var(--accent)" onclick="event.preventDefault(); event.stopPropagation(); selSgx('${esc(r.u.symbol)}'); setSec('Research')">Open in Research ›</a>` : ""}</div>` : ""}
     </div>`;
   };
-  const h = list.length ? list.map(row).join("") : `<div class="empty">${find ? "No stock matches." : pbShow === "mine" ? "Your Research list has no stocks in this market." : "No prices yet."}</div>`;
+  const head = (t, sub, n) => `<div class="pb-h"><b>${t}${n != null ? ` (${n})` : ""}</b>${sub ? `<span class="sub">${sub}</span>` : ""}</div>`;
+  const none = (t) => `<div class="empty" style="padding:10px 0">${t}</div>`;
+  const yld = (r) => r.dy ? `yield ${fmt(r.dy, 1)}%` : "";
+  // long groups show their first few rows and a "Show all" line
+  const cap = (key, arr, fn, n = 8) => (pbAll.has(key) ? arr : arr.slice(0, n)).map(fn).join("") +
+    (arr.length > n ? `<div class="pb-all" onclick="pbShowAll('${key}')">${pbAll.has(key) ? "Show fewer" : `Show all ${arr.length}`}</div>` : "");
+  let list = stocks.filter(r => pbShow === "all" || r.mine), h = "";
+  if (!list.length) h = none(pbShow === "mine" ? "Your Research list has no stocks in this market." : "No prices yet.");
+  else if (find) {
+    const hit = list.filter(r => r.nm.toLowerCase().includes(find) || shortSym(r.u.symbol).toLowerCase().includes(find)).sort((a, x) => a.nm.localeCompare(x.nm));
+    h = hit.length ? hit.map(r => row(r, yld(r))).join("") : none("No stock matches.");
+  } else if (pbView === "movers") {
+    const ups = list.filter(r => r.chg >= 5e-5).sort((a, x) => x.chg - a.chg).slice(0, 5);
+    const dns = list.filter(r => r.chg <= -5e-5).sort((a, x) => a.chg - x.chg).slice(0, 5);
+    const swing = list.filter(r => r.q.day_low > 0 && r.q.prev_close > 0).map(r => ({ r, s: (r.q.day_high - r.q.day_low) / r.q.prev_close }))
+      .sort((a, x) => x.s - a.s).slice(0, 5);
+    h = head("Biggest rises today", "top 5") + (ups.length ? ups.map(r => row(r, yld(r))).join("") : none("Nothing is up today.")) +
+      head("Biggest falls today", "top 5") + (dns.length ? dns.map(r => row(r, yld(r))).join("") : none("Nothing is down today.")) +
+      head("Widest swing today", "day high to low, as % of yesterday's close") + (swing.length ? swing.map(x => row(x.r, `swung ${fmt(x.s * 100, 1)}%`)).join("") : none("No trades yet today."));
+  } else if (pbView === "ind") {
+    const g = {}; list.forEach(r => (g[r.sec] = g[r.sec] || []).push(r));
+    const groups = Object.entries(g).map(([n, rs]) => { const k = rs.filter(r => r.chg != null);
+      return { n, rs, avg: k.length ? k.reduce((a, r) => a + r.chg, 0) / k.length : null, up: rs.filter(r => r.chg >= 5e-5).length, dn: rs.filter(r => r.chg <= -5e-5).length }; })
+      .sort((a, x) => (x.avg ?? -9) - (a.avg ?? -9));
+    h = `<div class="sub" style="margin:6px 0 2px">Best industry first, by the average move of its stocks today. Tap an industry to see its stocks.</div>` +
+      groups.map(G => { const open = pbGrp.has(G.n);
+        return `<div class="pb-g" onclick="pbGroup('${esc(G.n).replace(/'/g, "\\'")}')"><div style="min-width:0"><div class="nm"><i style="background:${secCol(G.n)}"></i>${esc(G.n)} <span class="sub">${open ? "▾" : "▸"}</span></div>
+            <div class="sub">${G.rs.length} stock${G.rs.length === 1 ? "" : "s"} · <span class="up">${G.up} up</span> · <span class="down">${G.dn} down</span></div></div>
+          <div class="ch ${flat(G.avg) ? "" : cls(G.avg)}">${G.avg == null ? "—" : pct(G.avg)}</div></div>` +
+          (open ? G.rs.slice().sort((a, x) => (x.chg ?? -9) - (a.chg ?? -9)).map(r => row(r, yld(r))).join("") : ""); }).join("");
+  } else if (pbView === "busy") {
+    const rv = list.filter(r => r.rvol != null).sort((a, x) => x.rvol - a.rvol).slice(0, 8);
+    const mo = list.filter(r => r.money != null).sort((a, x) => x.money - a.money).slice(0, 8);
+    h = head("Trading more than usual", "shares traded so far against a usual full day") +
+      (rv.length ? rv.map(r => row(r, `${fmt(r.rvol, 1)}× a usual day · ${vol(r.q.day_volume)} shares`)).join("") : none("No trades yet today.")) +
+      head("Most money traded today", "shares × price") + (mo.length ? mo.map(r => row(r, `${c}${vol(r.money)} traded`)).join("") : none("No trades yet today."));
+  } else if (pbView === "div") {
+    const dv = list.filter(r => r.dy).sort((a, x) => x.dy - a.dy);
+    h = head("Highest dividend yield", "past year's dividends against today's price") +
+      (dv.length ? cap("div", dv, r => row(r, `<b>yield ${fmt(r.dy, 1)}%</b>`), 10) : none("No dividend payers in this list.")) +
+      (dv.length ? `<div class="sub" style="margin-top:8px">${list.length - dv.length} of ${list.length} stocks pay no dividend. A very high yield can come from a one-off payout or a fallen price, so check the history.</div>` : "");
+  } else if (pbView === "hilo") {
+    const lows = list.filter(r => r.offLo != null && r.offLo <= 0.05).sort((a, x) => a.offLo - x.offLo);
+    const highs = list.filter(r => r.offHi != null && r.offHi >= -0.05).sort((a, x) => x.offHi - a.offHi);
+    const dpOf = (r) => r.px < 1 ? 3 : 2;
+    h = head("Near the 52-week low", "within 5%", lows.length) + (lows.length ? cap("lo", lows, r => row(r, r.offLo < 5e-4 ? `<b>at its 52-week low</b>` : `${fmt(r.offLo * 100, 1)}% above its low of ${fmt(r.lo, dpOf(r))}`)) : none("None within 5% of the low.")) +
+      head("Near the 52-week high", "within 5%", highs.length) + (highs.length ? cap("hi", highs, r => row(r, r.offHi > -5e-4 ? `<b>at its 52-week high</b>` : `${fmt(-r.offHi * 100, 1)}% below its high of ${fmt(r.hi, dpOf(r))}`)) : none("None within 5% of the high.")) +
+      `<div class="sub" style="margin-top:8px">${list.length - lows.length - highs.length} of ${list.length} stocks sit in between. Highs and lows use closing prices over the past year.</div>`;
+  } else {
+    h = list.slice().sort((a, x) => a.nm.localeCompare(x.nm)).map(r => row(r, yld(r))).join("");
+  }
   if (h !== pbHtml) { pbHtml = h; box.innerHTML = h; }
-  $("pb-note").textContent = `${mkt === "US" ? "US prices are near live" : "SGX prices run about 10 minutes late"}, refreshed every 5 minutes while the market is open. The line under each name shows where the price sits in today's range (left = day low, right = day high). ★ = on your Research list. Yield = dividends paid over the past year against today's price. For the exact live price, use the Tiger app.`;
+  $("pb-note").innerHTML = `<span class="pb-leg"><i></i></span> The white mark shows where the price is now between today's low (left number) and today's high (right number). ${mkt === "US" ? "US prices are near live" : "SGX prices run about 10 minutes late"}, refreshed every 5 minutes while the market is open. ★ = on your Research list. For the exact live price, use the Tiger app.`;
 }
 function pbToggle(sym) { pbOpen = pbOpen === sym ? "" : sym; pbHtml = ""; pbRender(); }
+function pbShowAll(k) { if (pbAll.has(k)) pbAll.delete(k); else pbAll.add(k); pbHtml = ""; pbRender(); }
+function pbGroup(n) { if (pbGrp.has(n)) pbGrp.delete(n); else pbGrp.add(n); pbHtml = ""; pbRender(); }
 $("pb-find").addEventListener("input", () => pbRender());
-$("pb-sort").addEventListener("change", () => pbSet("sort", $("pb-sort").value));
 setInterval(() => { if (!document.hidden) loadBoard(); }, 60000);
 
 // ---- Holdings: the Tiger account snapshot the laptop publishes about once a
