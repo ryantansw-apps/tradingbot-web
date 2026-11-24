@@ -240,6 +240,8 @@
     .mix { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 6px; }
     .news a { color: var(--text); text-decoration: none; display: block; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
     .news a .sub { display: block; margin-top: 2px; }
+    .news:not(.all) a.more { display: none; }
+    .news a .sub b { color: var(--accent); }
   </style>
 </head>
 <body>
@@ -1059,8 +1061,11 @@ function sgxDetail(d) {
   const peersT = (d.peer_list || []).length ? `<table class="vt"><tr><th>Peer</th><th class="r">Fwd P/E</th><th class="r">P/B</th><th class="r">Yield</th></tr>
     ${d.peer_list.map(x => `<tr><td class="lab">${esc((x.name || x.symbol).split(" ").slice(0, 2).join(" "))}</td><td class="r">${fmt(x.pe_fwd, 1)}</td><td class="r">${fmt(x.pb, 2)}</td><td class="r">${x.div_yield == null ? "—" : fmt(x.div_yield, 2) + "%"}</td></tr>`).join("")}</table>` : "";
 
-  const news = (d.news || []).map(n => `<a href="${esc(n.url || "#")}" target="_blank" rel="noopener noreferrer">${esc(n.title)}<span class="sub">${esc(n.date)}${n.source ? " · " + esc(n.source) : ""}</span></a>`).join("")
-    || `<div class="empty">No recent headlines.</div>`;
+  const NN = d.news || [], N0 = 5, nOpen = sgxNewsOpen === d.symbol;
+  const news = NN.length ? `<div class="news ${nOpen ? "all" : ""}" id="sgx-news">` +
+      NN.map((n, i) => `<a class="${i >= N0 ? "more" : ""}" href="${esc(n.url || "#")}" target="_blank" rel="noopener noreferrer">${esc(n.title)}<span class="sub">${newsWhen(n)}${n.source ? " · " + esc(n.source) : ""}</span></a>`).join("") + `</div>` +
+      (NN.length > N0 ? `<div class="pb-all" onclick="sgxNewsToggle('${esc(d.symbol)}', this)">${nOpen ? "Show fewer" : `Show all ${NN.length} headlines`}</div>` : "")
+    : `<div class="empty">No headlines naming this company in the last 30 days.</div>`;
 
   return `<div class="sgx-h"><div class="nm">${esc(d.name)} <span class="sub">${esc(d.symbol)}</span></div>
       <div class="px">${sgd(d.price)} <span class="${cls(chg)}" style="font-size:14px">${chg == null ? "" : signed(chg * 100, 2, true)}</span></div>
@@ -1068,18 +1073,35 @@ function sgxDetail(d) {
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
+    <div class="sec">Latest news</div>${news}
+    <div class="sub" style="margin-top:4px">Headlines naming ${esc(sgxLabel(d))} in the last 30 days, newest first. Tap one to read it on the news site.</div>
     <button class="ghost" style="width:100%;margin-top:10px" onclick="setSec('Order','sg')">Trade ${esc(shortSym(d.symbol))} ›</button>
     <div class="itabs" id="sgx-itabs">${SGX_ISECS.map(([k, n]) => `<button data-ik="${k}" onclick="setISec('${k}')">${n}</button>`).join("")}</div>
     <div data-isec="overview"><div class="sec">What's moving it</div>${fac}<div class="sec">Profitability and price</div>${prof}</div>
     <div data-isec="ratios"><div id="sgx-ratios"><div class="empty">Working out the ratios…</div></div></div>
     <div data-isec="value"><div class="sec">Valuation vs peers and market</div>${vt}${peersT ? `<div class="sec">Peers</div>${peersT}` : ""}<div class="sec">Analyst expectations</div>${an}</div>
     <div data-isec="earn"><div class="sec">Earnings</div>${earn}</div>
-    <div data-isec="news"><div class="sec">News</div><div class="news">${news}</div></div>
-    <div class="sub" style="margin-top:10px">Source: Yahoo Finance, delayed. Prices in ${d.currency === "USD" ? "USD" : "SGD"}.</div>`;
+    <div class="sub" style="margin-top:10px">Source: Yahoo Finance, delayed. News: Google News and Yahoo, checked every hour on weekdays. Prices in ${d.currency === "USD" ? "USD" : "SGD"}.</div>`;
 }
 
 // Research detail inner tabs
-const SGX_ISECS = [["overview", "Overview"], ["ratios", "Ratios"], ["value", "Valuation"], ["earn", "Earnings"], ["news", "News"]];
+const SGX_ISECS = [["overview", "Overview"], ["ratios", "Ratios"], ["value", "Valuation"], ["earn", "Earnings"]];
+// headline age in Singapore time: "today 9:20 AM", "yesterday", "3 days ago", "12 Nov"
+function newsWhen(n) {
+  if (!n.at) return esc(n.date || "");
+  const t = new Date(n.at), day = (x) => new Date(x.getTime() + 8 * 3600e3).toISOString().slice(0, 10);
+  const days = Math.round((Date.parse(day(new Date())) - Date.parse(day(t))) / 864e5);
+  const tm = n.timed ? " " + t.toLocaleTimeString("en-SG", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Singapore" }) : "";
+  return days <= 0 ? `<b>today${tm}</b>` : days === 1 ? `yesterday${tm}` : days < 7 ? `${days} days ago`
+    : t.toLocaleDateString("en-SG", { day: "numeric", month: "short", timeZone: "Asia/Singapore" });
+}
+let sgxNewsOpen = "";
+function sgxNewsToggle(sym, el) {
+  sgxNewsOpen = sgxNewsOpen === sym ? "" : sym;
+  const box = $("sgx-news"); if (!box) return;
+  box.classList.toggle("all", sgxNewsOpen === sym);
+  el.textContent = sgxNewsOpen === sym ? "Show fewer" : `Show all ${box.children.length} headlines`;
+}
 const iKey = "tb_isec";
 let sgxISec = (() => { try { const v = localStorage.getItem(iKey); return SGX_ISECS.some(x => x[0] === v) ? v : "overview"; } catch (_) { return "overview"; } })();
 function setISec(k) { sgxISec = k; try { localStorage.setItem(iKey, k); } catch (_) {} applyISec(); }
