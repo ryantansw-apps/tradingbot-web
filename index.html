@@ -1149,10 +1149,10 @@ async function sgxAnalysis(sym) {
   $("sgx-fa").innerHTML = anFa(a.fa);
   $("sgx-ta").innerHTML = anTa(a.tech, d, a.ser);
   chartMarks(); drawInd();
-  if (a.tech && !trackC.busy && (!trackC.at || Date.now() - trackC.at >= 60 * 60 * 1000)) {
+  if (a.tech && (trackC.p || !trackFresh())) {
     const again = getTrack();     // Loading… shows while it runs, then the lines fill in
     $("sgx-ta").innerHTML = anTa(a.tech, d, a.ser);
-    again.then(() => { if (sym === sgxSel && $("sgx-ta")) { $("sgx-ta").innerHTML = anTa(a.tech, d, a.ser); chartMarks(); drawInd(); } });
+    again.then(() => { if ($("sgx-ta") && sgxSel) sgxAnalysis(sgxSel); });   // whichever stock is selected now
   }
 }
 // Overview: the short version, so the entry read is on the first screen
@@ -1204,25 +1204,30 @@ const anWeekly = (t) => !("weekly" in t) ? "" : !t.weekly
 const anRsTable = (rs) => !rs || !(rs.rows || []).length ? "" : `<table class="vt"><tr><th>Period</th><th class="r">Stock</th><th class="r">${esc(rs.label)}</th><th class="r">Gap</th></tr>
   ${rs.rows.map(x => `<tr><td class="lab">${esc(x.period)}</td><td class="r">${signed(x.stock * 100, 1, true)}</td><td class="r">${signed(x.index * 100, 1, true)}</td><td class="r"><b class="${x.gap > 0 ? "up" : x.gap < 0 ? "down" : ""}">${signed(x.gap * 100, 1, true)}</b></td></tr>`).join("")}</table>`;
 // Track record of each entry setup (tb_report 'track'): fetched once, kept for an hour
-const trackC = { at: 0, data: null, busy: false };
-async function getTrack() {
-  if (trackC.busy || (trackC.at && Date.now() - trackC.at < 60 * 60 * 1000)) return;
-  trackC.busy = true;
-  try {
-    const { data } = await sb.from("tb_report").select("data").eq("key", "track").maybeSingle();
-    trackC.data = data?.data || null;
-  } catch (_) { trackC.data = null; }
-  trackC.at = Date.now(); trackC.busy = false;
+const trackC = { at: 0, data: null, p: null };    // p: the fetch in flight, shared by every caller
+const trackFresh = () => trackC.at && Date.now() - trackC.at < 60 * 60 * 1000;
+function getTrack() {
+  if (trackC.p) return trackC.p;
+  if (trackFresh()) return Promise.resolve();
+  trackC.p = (async () => {
+    try {
+      const { data } = await sb.from("tb_report").select("data").eq("key", "track").maybeSingle();
+      trackC.data = data?.data || null;
+    } catch (_) { trackC.data = null; }
+    trackC.at = Date.now(); trackC.p = null;
+  })();
+  return trackC.p;
 }
 const trkSigned = (v) => signed(v, 1, true);
 // the track lines under one entry setup: this stock, then everything on your list
 function anTrack(name) {
-  if (trackC.busy && !trackC.at) return `<span class="sub trk">Loading…</span>`;
+  if (trackC.p && !trackC.at) return `<span class="sub trk">Loading…</span>`;
   const T = trackC.data, sym = sgxSel; if (!T || !sym) return "";
   const mk = sym.endsWith(".SI") ? "SG" : "US", st = T.by?.[sym], me = st?.setups?.[name], pool = T.all?.[mk]?.setups?.[name];
   if (!st) return "";
   const n = me?.n || 0, h20 = me?.h?.["20"], out = [];
   out.push(n < 8 ? `On this stock, last 5 years: came on ${n} times. Too few to judge.`
+    : !h20 || !h20.n ? `On this stock, last 5 years: came on ${n} times. The results are too recent to measure.`
     : `On this stock, last 5 years: came on ${n} times. 20 trading days later it was up ${h20.up} of ${h20.n} times, middle result ${trkSigned(h20.med)} (any day: ${trkSigned(h20.base)}).`);
   const p20 = pool?.h?.["20"];
   if (p20 && p20.n) out.push(`Across your ${mk} list: ${pool.n} times, up ${Math.round(p20.up / p20.n * 100)}% of the time after 20 days, middle ${trkSigned(p20.med)} (any day: ${trkSigned(p20.base)}).`);
