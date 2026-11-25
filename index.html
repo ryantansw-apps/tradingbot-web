@@ -547,6 +547,18 @@
   </div>
 
   <div class="card" data-tab="sg">
+    <h2 data-card="portfolio">Portfolio view <span><span class="chev">▾</span></span></h2>
+    <div class="cbody">
+    <div class="sub">What you hold, added up: totals, how spread out it is, what the stops add up to, and the dates coming. Measurements only, nothing is bought or sold.</div>
+    <div class="seg2" id="pv-src" style="margin-top:10px">
+      <button class="ghost" data-src="journal" onclick="pvSet('journal')">My journal (open trades)</button>
+      <button class="ghost" data-src="tiger" onclick="pvSet('tiger')">Tiger practice account</button>
+    </div>
+    <div id="pv-body"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="card" data-tab="sg">
     <h2 data-card="holdings">All holdings <span><span class="chev">▾</span></span></h2>
     <div class="cbody">
     <div class="sub">Every position this app can see, in one place. After a basket order, this is where you see which stocks were really bought.</div>
@@ -2099,6 +2111,203 @@ function holdCheck(m, ccy) {
   $("bk-amt").value = Math.round(total);
   setSec("Baskets"); bkShowIdea(at >= 0 ? at : list.length - 1);
 }
+// ---- Portfolio view: one card for the open journal trades or the Tiger practice
+// account. The number work is in small pure functions (pfPositions, pfTotals,
+// pfBySym, pfConcentration, pfStopRisk, pfComingUp) so each can be checked on its
+// own. The risk numbers call the Baskets maths (needHist, calcStats). Everything
+// here is a measurement: nothing tells the reader to buy or sell.
+const PV_KEY = "tb_pv_src";
+let pvSrc = (() => { try { return localStorage.getItem(PV_KEY) === "tiger" ? "tiger" : "journal"; } catch (_) { return "journal"; } })();
+let pvHtml = "", pvSeq = 0, pvDivSig = "", pvDivs = {};
+const PV_SYM = { SGD: "S$", USD: "US$" };
+const pvM = (v, c, d = 0) => `${v < 0 ? "-" : ""}${PV_SYM[c] || c + " "}${fmt(Math.abs(v), d)}`;
+const pvSgd = (v, c, rate) => c === "USD" ? (rate ? v * rate : null) : v;   // value in SGD, or null when a US value has no rate
+const pvName = (p) => esc(sgxLabel({ symbol: p.symbol, name: p.name }));
+function pvRate() { const d = mkData.US && mkData.US.data, r = d ? Number(d.usdsgd) : 0; return r > 0 ? { rate: r, at: d.usdsgd_at || null } : null; }
+// rows: journal rows, or Tiger positions already run through holdCalc (stock, long). res = sgxCache.res, uni = bkUni.
+function pfPositions(src, rows, res, uni) {
+  const held = [], noPrice = [];
+  rows.forEach(r => {
+    const sym = r.symbol, rd = res[sym] && res[sym].data, u = uni[sym] || {}, qty = Number(r.qty), j = src === "journal";
+    const ccy = j ? (r.currency === "USD" || (!r.currency && r.market === "US") ? "USD" : "SGD") : (r.currency === "USD" ? "USD" : "SGD");
+    const price = j ? (rd && rd.price > 0 ? Number(rd.price) : Number(u.price) > 0 ? Number(u.price) : null) : (r.px > 0 ? Number(r.px) : null);
+    const sec = (rd && rd.sector) || u.sector;
+    const p = { symbol: sym, name: r.name || (rd && rd.name) || sym, qty, price, value: price == null ? null : price * qty, currency: ccy,
+      sector: sec ? secName(sec) : "Unknown", stop: j && r.stop > 0 ? Number(r.stop) : null };
+    (price == null ? noPrice : held).push(p);
+  });
+  return { held, noPrice };
+}
+// money per currency, and one total in SGD (null when there are US holdings and no rate)
+function pfTotals(held, rate) {
+  const by = {}; held.forEach(p => { by[p.currency] = (by[p.currency] || 0) + p.value; });
+  return { by, sgd: by.USD && !rate ? null : (by.SGD || 0) + (by.USD || 0) * (rate || 0) };
+}
+// one entry per stock (two lots of the same stock count once), biggest first. Mixed currencies are put in SGD; null when that needs a rate that is missing.
+// One currency only needs no rate: the values stay as they are.
+function pfBySym(held, rate) {
+  const m = new Map(), mixed = new Set(held.map(p => p.currency)).size > 1;
+  for (const p of held) {
+    const v = mixed ? pvSgd(p.value, p.currency, rate) : p.value; if (v == null) return null;
+    const e = m.get(p.symbol) || { symbol: p.symbol, name: p.name, sector: p.sector, currency: p.currency, value: 0 };
+    e.value += v; m.set(p.symbol, e);
+  }
+  return [...m.values()].sort((a, b) => b.value - a.value);
+}
+function pfConcentration(held, rate) {
+  const S = pfBySym(held, rate); if (!S || !S.length) return null;
+  const tot = S.reduce((a, x) => a + x.value, 0); if (!(tot > 0)) return null;
+  const grp = (k) => { const g = {}; S.forEach(x => { g[x[k]] = (g[x[k]] || 0) + x.value / tot; }); return Object.entries(g).sort((a, b) => b[1] - a[1]); };
+  const top = S[0].value / tot, secs = grp("sector");
+  return { n: S.length, S, tot, top, topName: S[0].name, topSym: S[0].symbol, top3: S.slice(0, 3).reduce((a, x) => a + x.value, 0) / tot,
+    sectors: secs, ccys: grp("currency"), flagStock: top > 0.25, flagSector: secs[0][1] > 0.5 };
+}
+// loss if every stop is hit: sum of (price - stop) x qty over positions whose stop is below the price
+function pfStopRisk(held, rate) {
+  const hit = [], none = [], above = [], by = {};
+  held.forEach(p => {
+    if (p.stop == null) none.push(p);
+    else if (p.stop < p.price) { const loss = (p.price - p.stop) * p.qty; hit.push({ p, loss }); by[p.currency] = (by[p.currency] || 0) + loss; }
+    else above.push(p);
+  });
+  return { hit, none, above, by, sgd: by.USD && !rate ? null : (by.SGD || 0) + (by.USD || 0) * (rate || 0) };
+}
+// results and ex-dividend dates from today to 60 days ahead (Singapore date), soonest first.
+// divs: {symbol: last dividend paid per share}; a stock not in Research has no dates.
+function pfComingUp(all, res, today, divs) {
+  const out = [], notIn = [], seen = new Set();
+  all.forEach(p => {
+    if (seen.has(p.symbol)) return; seen.add(p.symbol);
+    const rd = res[p.symbol] && res[p.symbol].data; if (!rd) { notIn.push(p); return; }
+    const qty = all.filter(x => x.symbol === p.symbol).reduce((a, x) => a + x.qty, 0);
+    [["Results", rd.next_earnings], ["Ex-dividend", rd.ex_div]].forEach(([kind, d]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d || ""))) return;
+      const days = jrDays(today, d); if (days < 0 || days > 60) return;
+      const dps = kind === "Ex-dividend" && divs[p.symbol] > 0 ? divs[p.symbol] : null;
+      out.push({ symbol: p.symbol, name: p.name, kind, date: d, days, qty, dps, cash: dps == null ? null : qty * dps, currency: p.currency });
+    });
+  });
+  out.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.name < b.name ? -1 : 1);
+  return { out, notIn };
+}
+async function pvDividends(symbols) {   // last dividend paid per share, from the research job's own history
+  const sig = symbols.slice().sort().join(",");
+  if (sig === pvDivSig) return;
+  pvDivSig = sig; pvDivs = {};
+  if (!symbols.length) return;
+  const { data, error } = await sb.from("tb_sgx_research").select("symbol,divs:analysis->accounts->divs").in("symbol", symbols);
+  if (error) { pvDivSig = ""; return; }
+  (data || []).forEach(r => { const l = (Array.isArray(r.divs) ? r.divs : []).filter(x => Array.isArray(x) && Number(x[1]) > 0).sort((a, b) => String(a[0]) < String(b[0]) ? -1 : 1).pop(); if (l) pvDivs[r.symbol] = Number(l[1]); });
+}
+function pvSet(k) { pvSrc = k; try { localStorage.setItem(PV_KEY, k); } catch (_) {} pvHtml = ""; pvLoad(); }
+const pvTick = () => { if (document.body.dataset.tab === "sg" && curSec("sg") === "Holdings") pvLoad(); };
+async function pvLoad() {
+  const box = $("pv-body"); if (!box) return;
+  const seq = ++pvSeq, put = (h) => { if (seq === pvSeq && h !== pvHtml) { pvHtml = h; box.innerHTML = h; } };
+  document.querySelectorAll("#pv-src button").forEach(b => { b.className = b.dataset.src === pvSrc ? "on-kind" : "ghost"; });
+  const msg = (t, c = "empty") => put(`<div class="${c}">${t}</div>`);
+  if (!getPass()) return msg(pvSrc === "tiger" ? "Holdings are private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode." : JR_PRIVATE);
+  const src = pvSrc; let rows, note = "", opts = 0;
+  if (src === "journal") {
+    const open = await journalOpen(); if (seq !== pvSeq) return;
+    if (jrC.bad) return msg(JR_BADPASS, "warn");
+    if (!jrC.rows) return msg(jrC.err ? "Could not load your journal." : "Loading…");
+    if (!sgxCache.wl.length && !Object.keys(bkUni).length) return msg("Loading…");
+    if (!open.length) return msg("No open trades in your journal yet.");
+    rows = open;
+  } else {
+    await loadHoldings(); if (seq !== pvSeq) return;
+    if (!holdRow) return msg("No holdings data yet. Check the passcode, and that the laptop is on.");
+    const P = (holdRow.data.positions || []).map(holdCalc);
+    opts = P.filter(p => p.kind === "OPT").length;
+    rows = P.filter(p => p.kind === "STK" && p.qty > 0);
+    if ((Date.now() - new Date(holdRow.updated_at)) / 60000 > 5) note = `<div class="sub warn" style="margin-top:8px">Last read from Tiger ${ago(holdRow.updated_at)}. The laptop may be off or asleep.</div>`;
+    if (!rows.length) return msg("No positions in the practice account.");
+  }
+  if (!mkData.US) { const { data } = await sb.from("tb_market").select("*").eq("market", "US"); (data || []).forEach(r => { mkData[r.market] = r; }); }
+  const { held, noPrice } = pfPositions(src, rows, sgxCache.res, bkUni), rr = pvRate(), rate = rr && rr.rate;
+  await pvDividends([...new Set([...held, ...noPrice].map(p => p.symbol))].filter(s => sgxCache.res[s]));
+  // risk: the Baskets maths on the money in each stock, against the index of the bigger market
+  const conc = pfConcentration(held, rate);
+  let risk = null;
+  if (conc && conc.S.length >= 2) {
+    const sgShare = conc.S.filter(x => x.currency === "SGD").reduce((a, x) => a + x.value, 0) / conc.tot, bench = sgShare >= 0.5 ? "ES3.SI" : "SPY";
+    if (await needHist([...conc.S.map(x => x.symbol), bench])) {
+      const H = conc.S.filter(x => Array.isArray(bkHist[x.symbol]) && bkHist[x.symbol].length >= 60), bh = bkHist[bench];
+      const st = H.length >= 2 && Array.isArray(bh) ? calcStats(H.map(x => bkHist[x.symbol]), H.map(x => x.value), bh) : null;
+      if (st) risk = { st, n: H.length, of: conc.S.length, bname: bench === "SPY" ? "S&amp;P 500" : "STI" };
+    }
+  }
+  if (seq !== pvSeq) return;
+  put(pvBuild(src, held, noPrice, rr, conc, risk, pfStopRisk(held, rate), pfComingUp([...held, ...noPrice], sgxCache.res, jrToday(), pvDivs), note, opts));
+}
+function pvBuild(src, held, noPrice, rr, conc, risk, stop, up, note, opts) {
+  const rate = rr && rr.rate, T = pfTotals(held, rate), ccys = Object.keys(T.by).sort();
+  const st = (k, v, sub) => `<div class="stat"><div class="k">${k}</div><div class="v small">${v}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  const rateTxt = rr ? `US$1 = S$${fmt(rr.rate, 4)}${rr.at ? `, rate of ${esc(anDay(String(rr.at).slice(0, 10)))}` : ""}` : "";
+  const cnt = (c) => held.filter(p => p.currency === c).length;
+  let h = note;
+  if (!held.length) h += `<div class="empty" style="margin-top:8px">No position has a live price yet, so there are no totals to show.</div>`;
+  else {
+    h += `<div class="mini" style="grid-template-columns:repeat(2,1fr);margin-top:8px">` +
+      ccys.map(c => st(`In ${PV_SYM[c]}`, pvM(T.by[c], c), `${cnt(c)} position${cnt(c) === 1 ? "" : "s"}`)).join("") +
+      (T.sgd != null && ccys.length > 1 ? st("All in S$", pvM(T.sgd, "SGD"), rateTxt) : "") + `</div>`;
+    if (ccys.length > 1 && T.sgd == null) h += `<div class="sub" style="margin-top:6px">No US$ to S$ exchange rate is stored yet, so there is no combined total, and the mixes below wait for it.</div>`;
+    else if (ccys.length === 1 && ccys[0] === "USD" && rate) h += `<div class="sub" style="margin-top:6px">About ${pvM(T.sgd, "SGD")} at ${rateTxt}.</div>`;
+  }
+  if (noPrice.length) h += `<div class="sub warn" style="margin-top:8px"><b>No live price</b>: ${noPrice.map(pvName).join(", ")}. Left out of the totals and the numbers below. Add ${noPrice.length === 1 ? "it" : "them"} to Research to get a price.</div>`;
+  if (opts) h += `<div class="sub" style="margin-top:6px">${opts} option${opts === 1 ? " is" : "s are"} not included here. Only shares are.</div>`;
+  if (held.length) {
+    h += `<div class="pf-sub">Concentration</div>`;
+    if (!conc) h += `<div class="sub">Needs the US$ to S$ rate to compare US and Singapore holdings.</div>`;
+    else {
+      const flag = `<div class="warn" style="font-size:12px">concentrated (rule of thumb)</div>`;
+      h += pfRow("Holdings", String(conc.n), "") +
+        pfRow("Biggest holding", `${fmt(conc.top * 100, 1)}%`, "") + (conc.flagStock ? flag : "") +
+        `<div class="sub">${pvName({ symbol: conc.topSym, name: conc.topName })}. Rule of thumb: over 25% in one stock is a lot in one place.</div>` +
+        pfRow("Top three together", `${fmt(conc.top3 * 100, 1)}%`, "") +
+        pfRow(`Biggest sector: ${esc(conc.sectors[0][0])}`, `${fmt(conc.sectors[0][1] * 100, 1)}%`, "") + (conc.flagSector ? flag : "") +
+        `<div class="sub">Rule of thumb: over 50% in one sector is a lot in one place.</div>`;
+      const sp = conc.sectors, cp = conc.ccys, cc = (n) => n === "USD" ? "#2a78d6" : "#eda100";
+      const leg = (parts, f) => parts.map(([n, w], i) => `<div><i style="background:${f(n, i)}"></i><span>${esc(n)}</span><b>${fmt(w * 100, 0)}%</b></div>`).join("");
+      h += `<div class="pf-pies"><div><div class="pf-sub" style="margin-top:12px">Sector mix</div>${bkPie(sp, "Sectors")}<div class="pf-leg">${leg(sp, secCol)}</div></div>
+        <div><div class="pf-sub" style="margin-top:12px">Currency mix</div>${bkPie(cp, "Currencies", cc)}<div class="pf-leg">${leg(cp, cc)}</div></div></div>`;
+    }
+    h += `<div class="pf-sub">If every stop is hit</div>`;
+    if (src === "tiger") h += `<div class="sub">Stops come from your journal.</div>`;
+    else {
+      if (stop.hit.length) {
+        const parts = Object.keys(stop.by).sort().map(c => pvM(stop.by[c], c)), one = ccys.length === 1 || stop.sgd == null;
+        const figure = one ? parts.join(" and ") : pvM(stop.sgd, "SGD");
+        const c0 = ccys[0], pc = stop.sgd != null && T.sgd > 0 ? ` (${fmt(stop.sgd / T.sgd * 100, 1)}% of the total)` : ccys.length === 1 && T.by[c0] > 0 ? ` (${fmt(stop.by[c0] / T.by[c0] * 100, 1)}% of the total)` : "";
+        h += `<div class="pf-m"><div class="t"><span>Loss if every stop is hit</span><b class="down">${figure}</b></div></div>
+          <div class="sub">About ${figure}${pc}, counting ${stop.hit.length} position${stop.hit.length === 1 ? "" : "s"} with a stop below the latest price. Fees and gaps past a stop are not counted.${stop.sgd == null && ccys.length > 1 ? " No rate is stored yet, so there is no combined figure." : ""}</div>`;
+      } else h += `<div class="sub">No position has a stop below its latest price.</div>`;
+      if (stop.above.length) h += `<div class="sub warn" style="margin-top:6px">At or below the stop already: ${stop.above.map(pvName).join(", ")}.</div>`;
+      if (stop.none.length) h += `<div class="sub" style="margin-top:6px"><b>No stop set</b>: ${stop.none.map(pvName).join(", ")}.</div>`;
+    }
+  }
+  h += `<div class="pf-sub">Coming up</div>`;
+  h += up.out.length ? up.out.map(e => `<div class="ord-row"><div style="min-width:0"><b>${pvName(e)}</b>
+      <div class="sub">${e.kind}${e.cash != null ? `: about ${pvM(e.cash, e.currency, 2)} (${fmt(e.qty, 0)} x ${pvM(e.dps, e.currency, 3)}, the last dividend paid)` : ""}</div></div>
+      <div style="text-align:right;white-space:nowrap"><b>${esc(anDay(e.date))}</b><div class="sub">${e.days === 0 ? "today" : `in ${e.days} day${e.days === 1 ? "" : "s"}`}</div></div></div>`).join("")
+    : `<div class="sub">No results or ex-dividend dates in the next 60 days for the stocks in Research.</div>`;
+  if (up.notIn.length) h += `<div class="sub" style="margin-top:6px">${up.notIn.map(p => `${pvName(p)}: Add to Research to see its dates.`).join("<br>")}</div>`;
+  if (held.length) {
+    h += `<div class="pf-sub">Risk</div>`;
+    if (!conc) h += `<div class="sub">Needs the US$ to S$ rate to weigh US and Singapore holdings together.</div>`;
+    else if (!risk) h += `<div class="sub">${conc.S.length < 2 ? "Needs at least 2 different stocks." : "Needs a year of price history for at least 2 holdings, and shared trading days with the index."}</div>`;
+    else {
+      const s = risk.st, bs = risk.bname;
+      h += pfRow("Beta", pfNum(s.beta), `If the ${bs} moves 1%, these holdings together have tended to move ${pfNum(Math.abs(s.beta))}%${s.beta < 0 ? " the opposite way" : ""}.`, "r") +
+        pfRow("Yearly swing", pfPct(s.vol, 0), `How bumpy the mix has been, per year. The ${bs}: ${pfPct(s.bvol, 0)}.`, "r") +
+        pfRow("Worst fall", `<span class="down">${pfPct(s.dd, 1)}</span>`, `Biggest drop from a high to a later low over the last year, holding today's mix. The ${bs}: ${pfPct(s.bdd, 1)}.`, "x") +
+        pfRow("How much they move together", pfNum(s.avgC), "Average link between the holdings' daily moves: 1 = in step, 0 = unrelated. Lower spreads the swings.", "r") +
+        `<div class="sub" style="margin-top:6px">Weighted by money held, on ${risk.n} of ${risk.of} stocks that have a year of history, against the ${bs}. Each price is in its own currency, so exchange-rate moves are not included.</div>`;
+    }
+  }
+  return h;
+}
 const ORD_ST = { queued: ["Waiting for laptop", ""], sending: ["Sending", ""], working: ["Open at Tiger", ""],
   "partially filled": ["Part filled", "up"], filled: ["Filled", "up"], cancelled: ["Cancelled", ""],
   rejected: ["Refused", "down"], expired: ["Expired", ""], error: ["Failed", "down"], unknown: ["Check Tiger app", "down"] };
@@ -3471,13 +3680,13 @@ const tabKey = "tb_tab";
 // Section tabs: one group of cards at a time instead of one long scroll.
 const SECTIONS = {
   us: [["Overview", ["pnl", "perf", "uschart"]], ["Trades", ["positions", "signals", "trades"]], ["Watchlist", ["watchlist"]], ["Controls", ["controls"]]],
-  sg: [["Prices", ["prices"]], ["Market", ["market"]], ["Screener", ["screen", "sgxcmp"]], ["Research", ["sgx"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Journal", ["journal"]], ["Holdings", ["holdings"]], ["Alerts", ["alerts"]]],
+  sg: [["Prices", ["prices"]], ["Market", ["market"]], ["Screener", ["screen", "sgxcmp"]], ["Research", ["sgx"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Journal", ["journal"]], ["Holdings", ["portfolio", "holdings"]], ["Alerts", ["alerts"]]],
 };
 const secKey = (t) => "tb_sec_" + t;
 const curSec = (t) => { const d = SECTIONS[t][0][0]; try { const v = localStorage.getItem(secKey(t)); return SECTIONS[t].some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
 function setSec(name, t = document.body.dataset.tab || "us") {
   try { localStorage.setItem(secKey(t), name); } catch (_) {}
-  applySec(); window.scrollTo(0, 0); loadBoard(true); jrTick(); alTick();
+  applySec(); window.scrollTo(0, 0); loadBoard(true); jrTick(); alTick(); pvTick();
 }
 function applySec() {
   const t = document.body.dataset.tab || "us", sec = curSec(t);
@@ -3505,7 +3714,7 @@ setMkt(mkt);
 setTab((() => { try { return localStorage.getItem(tabKey); } catch (_) { return null; } })() === "sg" ? "sg" : "us");
 
 wireCollapse();
-const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); loadMarket(); loadHoldings(); loadBoard(); jrTick(); alTick(); };
+const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); loadMarket(); loadHoldings(); loadBoard(); jrTick(); alTick(); pvTick(); };
 refreshAll(); setInterval(refreshAll, 15000);
 
 // ---- self-update ----------------------------------------------------------
