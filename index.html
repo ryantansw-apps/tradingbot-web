@@ -2160,7 +2160,8 @@ function pfConcentration(held, rate) {
   const grp = (k) => { const g = {}; S.forEach(x => { g[x[k]] = (g[x[k]] || 0) + x.value / tot; }); return Object.entries(g).sort((a, b) => b[1] - a[1]); };
   const top = S[0].value / tot, secs = grp("sector");
   return { n: S.length, S, tot, top, topName: S[0].name, topSym: S[0].symbol, top3: S.slice(0, 3).reduce((a, x) => a + x.value, 0) / tot,
-    sectors: secs, ccys: grp("currency"), flagStock: top > 0.25, flagSector: secs[0][1] > 0.5 };
+    sectors: secs, ccys: grp("currency"), flagStock: top > 0.25, flagSector: secs[0][0] !== "Unknown" && secs[0][1] > 0.5,
+    unknownN: secs[0][0] === "Unknown" ? S.filter(x => x.sector === "Unknown").length : 0 };
 }
 // loss if every stop is hit: sum of (price - stop) x qty over positions whose stop is below the price
 function pfStopRisk(held, rate) {
@@ -2207,20 +2208,27 @@ async function pvLoad() {
   document.querySelectorAll("#pv-src button").forEach(b => { b.className = b.dataset.src === pvSrc ? "on-kind" : "ghost"; });
   const msg = (t, c = "empty") => put(`<div class="${c}">${t}</div>`);
   if (!getPass()) return msg(pvSrc === "tiger" ? "Holdings are private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode." : JR_PRIVATE);
-  const src = pvSrc; let rows, note = "", opts = 0;
+  const src = pvSrc; let rows, note = "", left = 0;
   if (src === "journal") {
     const open = await journalOpen(); if (seq !== pvSeq) return;
     if (jrC.bad) return msg(JR_BADPASS, "warn");
     if (!jrC.rows) return msg(jrC.err ? "Could not load your journal." : "Loading…");
-    if (!sgxCache.wl.length && !Object.keys(bkUni).length) return msg("Loading…");
+    if (!Object.keys(bkUni).length) {   // wait for the universe rows (or their failure) before saying a stock has no live price
+      msg("Loading…"); await bkLoad(); if (seq !== pvSeq) return;
+      if (!Object.keys(bkUni).length) return msg(sgxCache.wl.length ? "Could not load prices just now. Try again in a moment." : "Loading…");
+    }
     if (!open.length) return msg("No open trades in your journal yet.");
     rows = open;
   } else {
     await loadHoldings(); if (seq !== pvSeq) return;
-    if (!holdRow) return msg("No holdings data yet. Check the passcode, and that the laptop is on.");
+    if (!holdRow) {   // an empty answer can also mean a wrong passcode
+      let ok = null; try { const r = await passOk(); if (!r.error && typeof r.data === "boolean") ok = r.data; } catch (_) {}
+      if (seq !== pvSeq) return;
+      return ok === false ? msg(JR_BADPASS, "warn") : msg("No holdings data yet. Check the passcode, and that the laptop is on.");
+    }
     const P = (holdRow.data.positions || []).map(holdCalc);
-    opts = P.filter(p => p.kind === "OPT").length;
     rows = P.filter(p => p.kind === "STK" && p.qty > 0);
+    left = P.length - rows.length;
     if ((Date.now() - new Date(holdRow.updated_at)) / 60000 > 5) note = `<div class="sub warn" style="margin-top:8px">Last read from Tiger ${ago(holdRow.updated_at)}. The laptop may be off or asleep.</div>`;
     if (!rows.length) return msg("No positions in the practice account.");
   }
@@ -2239,9 +2247,9 @@ async function pvLoad() {
     }
   }
   if (seq !== pvSeq) return;
-  put(pvBuild(src, held, noPrice, rr, conc, risk, pfStopRisk(held, rate), pfComingUp([...held, ...noPrice], sgxCache.res, jrToday(), pvDivs), note, opts));
+  put(pvBuild(src, held, noPrice, rr, conc, risk, pfStopRisk(held, rate), pfComingUp([...held, ...noPrice], sgxCache.res, jrToday(), pvDivs), note, left));
 }
-function pvBuild(src, held, noPrice, rr, conc, risk, stop, up, note, opts) {
+function pvBuild(src, held, noPrice, rr, conc, risk, stop, up, note, left) {
   const rate = rr && rr.rate, T = pfTotals(held, rate), ccys = Object.keys(T.by).sort();
   const st = (k, v, sub) => `<div class="stat"><div class="k">${k}</div><div class="v small">${v}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
   const rateTxt = rr ? `US$1 = S$${fmt(rr.rate, 4)}${rr.at ? `, rate of ${esc(anDay(String(rr.at).slice(0, 10)))}` : ""}` : "";
@@ -2256,7 +2264,7 @@ function pvBuild(src, held, noPrice, rr, conc, risk, stop, up, note, opts) {
     else if (ccys.length === 1 && ccys[0] === "USD" && rate) h += `<div class="sub" style="margin-top:6px">About ${pvM(T.sgd, "SGD")} at ${rateTxt}.</div>`;
   }
   if (noPrice.length) h += `<div class="sub warn" style="margin-top:8px"><b>No live price</b>: ${noPrice.map(pvName).join(", ")}. Left out of the totals and the numbers below. Add ${noPrice.length === 1 ? "it" : "them"} to Research to get a price.</div>`;
-  if (opts) h += `<div class="sub" style="margin-top:6px">${opts} option${opts === 1 ? " is" : "s are"} not included here. Only shares are.</div>`;
+  if (left) h += `<div class="sub" style="margin-top:6px">Left out: ${left} option or short position${left === 1 ? "" : "s"}.</div>`;
   if (held.length) {
     h += `<div class="pf-sub">Concentration</div>`;
     if (!conc) h += `<div class="sub">Needs the US$ to S$ rate to compare US and Singapore holdings.</div>`;
@@ -2266,7 +2274,7 @@ function pvBuild(src, held, noPrice, rr, conc, risk, stop, up, note, opts) {
         pfRow("Biggest holding", `${fmt(conc.top * 100, 1)}%`, "") + (conc.flagStock ? flag : "") +
         `<div class="sub">${pvName({ symbol: conc.topSym, name: conc.topName })}. Rule of thumb: over 25% in one stock is a lot in one place.</div>` +
         pfRow("Top three together", `${fmt(conc.top3 * 100, 1)}%`, "") +
-        pfRow(`Biggest sector: ${esc(conc.sectors[0][0])}`, `${fmt(conc.sectors[0][1] * 100, 1)}%`, "") + (conc.flagSector ? flag : "") +
+        pfRow(`Biggest sector: ${esc(conc.sectors[0][0])}`, `${fmt(conc.sectors[0][1] * 100, 1)}%`, "") + (conc.flagSector ? flag : "") + (conc.unknownN ? `<div class="sub">(sector not known for ${conc.unknownN} holding${conc.unknownN === 1 ? "" : "s"})</div>` : "") +
         `<div class="sub">Rule of thumb: over 50% in one sector is a lot in one place.</div>`;
       const sp = conc.sectors, cp = conc.ccys, cc = (n) => n === "USD" ? "#2a78d6" : "#eda100";
       const leg = (parts, f) => parts.map(([n, w], i) => `<div><i style="background:${f(n, i)}"></i><span>${esc(n)}</span><b>${fmt(w * 100, 0)}%</b></div>`).join("");
