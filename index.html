@@ -154,6 +154,7 @@
     .pf-kpi small { display: block; font-size: 10.5px; color: var(--muted, #8a97a6); }
     .pf-sub { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted, #8a97a6); margin: 16px 0 4px; }
     .pf-why { display: none; }
+    #pv-body .pf-why { display: block; }
     body.pf-explain .pf-why { display: block; }
     .pf-bars div { display: grid; grid-template-columns: 52px minmax(0, 1fr) 76px; gap: 8px; align-items: center; font-size: 12px; padding: 3px 0; }
     .pf-bars .trk { position: relative; height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
@@ -964,8 +965,10 @@ async function reviewFetchNow() {
   Object.assign(reviewCache, { at: Date.now(), trades: all, spy });
   return reviewCache;
 }
+const reviewUsd = (n, d = 0, plus = false) => n == null ? "n/a" : (n < 0 ? "-" : plus ? "+" : "") + "US$" + fmt(Math.abs(n), d);
+const reviewFall = x => x == null ? "n/a" : Math.abs(x * 100) < 0.005 ? "0.00%" : signed(x * 100, 2, true);
 const reviewDay = d => { const [, m, dd] = d.split("-").map(Number); return `${dd} ${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m - 1]}`; };
-const reviewPct = x => x == null ? "—" : `<span class="${cls(x)}">${signed(x * 100, 2, true)}</span>`;
+const reviewPct = x => x == null ? "n/a" : `<span class="${cls(x)}">${signed(x * 100, 2, true)}</span>`;
 function renderReview(r) {
   if (r && r.empty && r.trimmed) return `<div class="empty">No closed trades in the period SPY history covers yet.</div>`;
   if (!r || r.empty) return `<div class="empty">No closed trades yet, so there is nothing to compare.</div>`;
@@ -977,21 +980,21 @@ function renderReview(r) {
   h += `<table>
     <tr><td>Bot, logged trades since ${reviewDay(r.start)}</td><td class="r">${reviewPct(r.logRet)}</td></tr>
     <tr><td>SPY, same dates</td><td class="r">${reviewPct(r.spy && r.spy.ret)}</td></tr>${r.acctRet != null ? `
-    <tr><td>Bot, whole account since the $${fmt(REVIEW_START_EQUITY, 0)} start<div class="sub">start date not recorded here, so it cannot be set against SPY fairly</div></td><td class="r">${reviewPct(r.acctRet)}</td></tr>` : ""}</table>`;
-  if (r.gap != null && Math.abs(r.gap) >= 0.0025) h += `<div class="sub" style="margin-top:4px">The trade log explains ${signed(r.logRet * 100, 2, true)} of that (closed trades ${signed(r.realised, 0)} plus open positions ${signed(r.unreal, 0)}). The rest, ${signed(r.gap * 100, 2, true)}, is not in the log: for example trades from before the log began, fees, or interest.</div>`;
+    <tr><td>Bot, whole account since the ${reviewUsd(REVIEW_START_EQUITY)} start<div class="sub">start date not recorded here, so it cannot be set against SPY fairly</div></td><td class="r">${reviewPct(r.acctRet)}</td></tr>` : ""}</table>`;
+  if (r.gap != null && Math.abs(r.gap) >= 0.0025) h += `<div class="sub" style="margin-top:4px">The trade log explains ${signed(r.logRet * 100, 2, true)} of that (closed trades ${reviewUsd(r.realised, 0, true)} plus open positions ${reviewUsd(r.unreal, 0, true)}). The rest, ${signed(r.gap * 100, 2, true)}, is not in the log: for example trades from before the log began, fees, or interest.</div>`;
   h += `<table style="margin-top:8px"><tr><th>From the ${r.n} logged trades</th><th class="r">Bot</th><th class="r">SPY</th></tr>
-    <tr><td>Worst fall from a peak</td><td class="r down">${signed(r.botDD * 100, 2, true)}</td><td class="r ${r.spy ? "down" : ""}">${r.spy ? signed(r.spy.dd * 100, 2, true) : "—"}</td></tr>
-    <tr><td>Trades</td><td class="r">${r.n}</td><td class="r">—</td></tr>
-    <tr><td>Win rate</td><td class="r">${Math.round(r.winRate * 100)}%</td><td class="r">—</td></tr>
-    <tr><td>Average R</td><td class="r ${cls(r.avgR)}">${r.avgR == null ? "—" : signed(r.avgR, 2) + "R"}</td><td class="r">—</td></tr></table>
-    <div class="sub" style="margin-top:6px">Bot return on the logged trades = closed-trade profit plus open profit, over $${fmt(REVIEW_START_EQUITY, 0)}. ${r.spy ? `SPY uses ${r.spy.dividends ? "dividend-adjusted closes (dividends included)" : "plain closes (dividends not included)"}, ${reviewDay(r.spy.from)} to ${reviewDay(r.spy.to)}.` : "SPY price history is not available yet, so there is no comparison."}</div>
+    <tr><td>Worst fall from a peak</td><td class="r ${Math.abs(r.botDD * 100) < 0.005 ? "" : "down"}">${reviewFall(r.botDD)}</td><td class="r ${r.spy && Math.abs(r.spy.dd * 100) >= 0.005 ? "down" : ""}">${r.spy ? reviewFall(r.spy.dd) : "n/a"}</td></tr>
+    <tr><td>Trades</td><td class="r">${r.n}</td><td class="r"></td></tr>
+    <tr><td>Win rate</td><td class="r">${Math.round(r.winRate * 100)}%</td><td class="r"></td></tr>
+    <tr><td>Average R</td><td class="r ${cls(r.avgR)}">${r.avgR == null ? "n/a" : signed(r.avgR, 2) + "R"}</td><td class="r"></td></tr></table>
+    <div class="sub" style="margin-top:6px">Bot return on the logged trades = closed-trade profit plus open profit, over ${reviewUsd(REVIEW_START_EQUITY)}. ${r.spy ? `SPY uses ${r.spy.dividends ? "dividend-adjusted closes (dividends included)" : "plain closes (dividends not included)"}, ${reviewDay(r.spy.from)} to ${reviewDay(r.spy.to)}.` : "SPY price history is not available yet, so there is no comparison."}</div>
     <div class="sub">The bot's worst fall is measured trade by trade; SPY's day by day, so the two are not exactly like for like. The bot's worst fall counts closed trades only, not open positions.</div>
     <div class="sub">This block counts all ${r.n} closed trades${r.overlap ? " in this period" : ""}; the figures further down this card cover only the latest 50.</div>`;
   h += `<div class="sub" style="margin:10px 0 4px"><b>Is the edge real yet?</b></div>
     <div class="sub">${wk} of paper trading, ${r.n} closed trades.</div>
     <div class="sub">t-statistic of the per-trade R values: ${tLine}</div>
     <div class="sub">About 3 or more is the usual bar for "probably not luck". Below 2, the results so far could easily be chance.</div>`;
-  if (r.diff != null) h += `<div style="margin-top:8px">On the logged trades, the bot is ${r.diff >= 0 ? "ahead of" : "behind"} simply holding SPY by ${fmt(Math.abs(r.diff) * 100, 2)}% ${r.cmpWeeks < 1 ? "in under a week" : "over " + wkOf(r.cmpWeeks)} (${reviewDay(r.start)} to ${reviewDay(r.end)}).</div>`;
+  if (r.diff != null) h += `<div style="margin-top:8px">On the logged trades, the bot is ${r.diff >= 0 ? "ahead of" : "behind"} simply holding SPY by ${fmt(Math.abs(r.diff) * 100, 2)} percentage points ${r.cmpWeeks < 1 ? "in under a week" : "over " + wkOf(r.cmpWeeks)} (${reviewDay(r.start)} to ${reviewDay(r.end)}).</div>`;
   h += `<div class="sub" style="margin-top:6px">Paper results. Going live needs your explicit word and is not decided by this screen.</div>`;
   return h;
 }
@@ -1219,10 +1222,13 @@ async function loadSgx() {
   sgxCache = { wl: wl.data || [], res: Object.fromEntries((res.data || []).map(r => [r.symbol, r])), sig };
   const live = sgxCache.wl.filter(r => r.enabled && inMkt(r));
   if (!sgxSel || !live.some(r => r.symbol === sgxSel)) sgxSel = live[0]?.symbol || "";
-  renderSgx(); renderCmp(); renderScreen(); ordStock();
+  renderSgx(true); renderCmp(); renderScreen(); ordStock();
 }
 
-function renderSgx() {
+let sgxPending = false;   // a refresh arrived while a field in the detail had focus: draw it when focus leaves
+const sgxTyping = () => { const a = document.activeElement; return !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.closest("#sgx-detail")); };
+document.addEventListener("focusout", () => { if (sgxPending) setTimeout(() => { if (sgxPending && !sgxTyping()) renderSgx(); }, 350); });
+function renderSgx(poll) {
   const live = sgxCache.wl.filter(r => r.enabled && inMkt(r)), parked = sgxCache.wl.filter(r => !r.enabled && inMkt(r));
   $("sgx-chips").innerHTML = live.map(r => {
     const bad = r.status === "invalid", wait = !sgxCache.res[r.symbol];
@@ -1236,6 +1242,8 @@ function renderSgx() {
   const row = sgxCache.res[sgxSel];
   const wlRow = sgxCache.wl.find(r => r.symbol === sgxSel);
   $("sgx-asof").textContent = row ? (row.data?.price_at ? "price " + ago(row.data.price_at) : "updated " + ago(row.updated_at)) : "";
+  if (poll && sgxTyping()) { sgxPending = true; return; }   // keep what is being typed; the detail is drawn once focus leaves
+  sgxPending = false;
   if (!sgxSel) { $("sgx-detail").innerHTML = ""; return; }
   if (wlRow && wlRow.status === "invalid") { $("sgx-detail").innerHTML = `<div class="empty">⚠ ${esc(sgxSel)}: no data for this code. Check the ${sgxSel.endsWith(".SI") ? "SGX code" : "ticker"} and re-add it.</div>`; return; }
   if (!row) { $("sgx-detail").innerHTML = `<div class="empty">Finding data for ${esc(sgxSel)}… it appears after the next hourly refresh (weekdays, 9:30am to 5:30pm and 9:30pm to 4:30am SG time).</div>`; return; }
@@ -1323,7 +1331,7 @@ function sgxDetail(d) {
       (NN.length > N0 ? `<div class="pb-all" onclick="sgxNewsToggle('${esc(d.symbol)}', this)">${nOpen ? "Show fewer" : `Show all ${NN.length} headlines`}</div>` : "")
     : `<div class="empty">No headlines naming this company in the last 30 days.</div>`;
 
-  const annLink = /\.SI$/.test(d.symbol || "") ? `<a class="ext" href="https://www.sgx.com/securities/company-announcements" target="_blank" rel="noopener" style="display:block;margin-top:8px;color:var(--accent);font-weight:600;font-size:13.5px;text-decoration:none">Company announcements on the SGX website ›</a>
+  const annLink = /\.SI$/.test(d.symbol || "") ? `<a href="https://www.sgx.com/securities/company-announcements" target="_blank" rel="noopener" style="display:block;margin-top:8px;color:var(--accent);font-weight:600;font-size:13.5px;text-decoration:none">Company announcements on the SGX website ›</a>
     <div class="sub" style="margin-top:2px">Official filings: results, dividends, director dealings and share buy-backs. Opens the SGX site.</div>` : "";
 
   return `<div class="sgx-h"><div class="nm">${esc(d.name)} <span class="sub">${esc(d.symbol)}</span></div>
@@ -1477,7 +1485,7 @@ function szOut() {
   const o = $("sz-out"), c = szCalc(); if (!o || !c) return;
   const r = c.r, m = (v) => c.cur + fmt(v, 2);
   if (!r.ok) { o.innerHTML = `<div class="sub">${esc(r.msg)}</div>`; return; }
-  o.innerHTML = `<div>Shares: <b>${r.shares}</b>${c.lot > 1 ? ` (${r.shares / c.lot} lots of ${c.lot})` : ""}</div>
+  o.innerHTML = `<div>Shares: <b>${r.shares}</b>${c.lot > 1 ? ` (${r.shares / c.lot} lot${r.shares / c.lot === 1 ? "" : "s"} of ${c.lot})` : ""}</div>
     <div>Cost: <b>${m(r.cost)}</b></div>
     <div>If the stop is hit you lose about <b class="down">${m(r.riskUsed)}</b></div>
     <div>Stop is ${fmt(r.stopPct, 1)}% below the entry${r.stopAtr != null ? `, ${fmt(r.stopAtr, 1)} normal daily swings away` : ""}</div>
@@ -1495,7 +1503,7 @@ function szUse() {
   $("ord-px").value = szPx(parseFloat($("sz-entry").value));
   ordSetSide("BUY");
   setSec("Order", "sg");
-  toast("Order form filled. Check it, then press Review order.");
+  toast("Order form filled. Nothing is sent until you review and confirm it.");
 }
 function anFa(f) {
   if (!f || !f.groups.length) return `<div class="empty">No company figures on file for this stock yet.</div>`;
@@ -1555,7 +1563,7 @@ function anTrack(name) {
     : `On this stock, last 5 years: came on ${n} times. 20 trading days later it was up ${h20.up} of ${h20.n} times, middle result ${trkSigned(h20.med)} (any day: ${trkSigned(h20.base)}).`);
   const p20 = pool?.h?.["20"];
   if (p20 && p20.n) out.push(`Across your ${mk} list: ${pool.n} times, up ${Math.round(p20.up / p20.n * 100)}% of the time after 20 days, middle ${trkSigned(p20.med)} (any day: ${trkSigned(p20.base)}).`);
-  const cell = (x, k) => x && x.n ? (k === "up" ? `${x.up} of ${x.n}` : trkSigned(x[k])) : "n/a";
+  const cell = (x, k) => x && x.n ? (k === "up" ? `${esc(x.up)} of ${esc(x.n)}` : esc(trkSigned(x[k]))) : "n/a";
   const row = (lab, o, k) => `<tr><td>${lab}</td>${["5", "20", "60"].map(h => `<td class="r">${cell(o?.h?.[h], k)}</td>`).join("")}</tr>`;
   const table = `<details class="trk-d"><summary>5 / 20 / 60 days</summary><table class="vt"><tr><td></td><td class="r">5 days</td><td class="r">20 days</td><td class="r">60 days</td></tr>
     ${n ? row("This stock: up", me, "up") + row("Middle", me, "med") + row("Average", me, "avg") + row("Any day", me, "base") : ""}
@@ -1565,13 +1573,14 @@ function anTrack(name) {
 function anTa(t, d, ser) {
   if (!t) return `<div class="empty">No chart read yet: it needs 60 trading days of price history. A newly listed stock fills in over the coming weeks.</div>`;
   const px = d.price, { sup, res } = anLevels(t, px), pc = (v) => signed((v / px - 1) * 100, 1, true);
-  const bell = (v) => { const on = alHas(sgxSel, v > px ? "above" : "below", v), lab = (on ? "Alert already set at " : "Alert me at ") + anPx(v);
-    return `<div><button class="bell${on ? " on" : ""}" title="${esc(lab)}" aria-label="${esc(lab)}" onclick="alBell(${v})">\u{1F514}</button></div>`; };
+  const bellNum = (v) => { const n = Number(v); return isFinite(n) && n > 0 ? n : null; };   // only a real positive number goes into the button
+  const bell = (v) => { const nv = bellNum(v); if (nv == null) return ""; const on = alHas(sgxSel, nv > px ? "above" : "below", nv), lab = (on ? "Alert already set at " : "Alert me at ") + anPx(nv);
+    return `<div><button class="bell${on ? " on" : ""}" title="${esc(lab)}" aria-label="${esc(lab)}" onclick="alBell(${nv})">\u{1F514}</button></div>`; };
   const lrow = (x, kind) => `<tr><td class="lab">${kind}<div class="sub">${esc(x.note)}</div></td><td class="r"><b>${anPx(x.price)}</b>${bell(x.price)}</td><td class="r">${pc(x.price)}</td></tr>`;
   const room = sup[0] && res[0] ? (() => { const dn = 1 - sup[0].price / px, up = res[0].price / px - 1;
     return `<div class="sub" style="margin-top:6px">Room from here: <b>${fmt(dn * 100, 1)}%</b> down to the nearest support, <b>${fmt(up * 100, 1)}%</b> up to the nearest resistance, about ${fmt(up / dn, 1)} to 1. Chart readers compare these two distances: more room above than below is the better setup, but only while the support holds.</div>`; })() : "";
   const setup = (x) => `<div class="setup"><b>${esc(x.name)}</b><span class="st ${x.state}">${ST[x.state]}</span><span class="sub">${esc(x.text)}</span>${anTrack(x.name)}</div>`;
-  const pat = (p) => `<div class="setup"><b>${esc(p.name)}</b><span class="st ${p.status === "confirmed" ? "on" : p.status === "forming" ? "near" : "off"}">${ST[p.status]}</span><span class="fl ${p.bias === "+" ? "p" : p.bias === "-" ? "m" : "e"}" style="margin-left:8px"></span><span class="sub">${esc(p.text)}</span>${p.status === "forming" && p.trigger > 0 && px > 0 ? `<div><button class="ghost bell-b" onclick="alBell(${p.trigger})">${alHas(sgxSel, p.trigger > px ? "above" : "below", p.trigger) ? "Alert set at " : "Alert me at "}${anPx(p.trigger)}</button></div>` : ""}</div>`;
+  const pat = (p) => `<div class="setup"><b>${esc(p.name)}</b><span class="st ${p.status === "confirmed" ? "on" : p.status === "forming" ? "near" : "off"}">${ST[p.status]}</span><span class="fl ${p.bias === "+" ? "p" : p.bias === "-" ? "m" : "e"}" style="margin-left:8px"></span><span class="sub">${esc(p.text)}</span>${p.status === "forming" && bellNum(p.trigger) != null && px > 0 ? `<div><button class="ghost bell-b" onclick="alBell(${bellNum(p.trigger)})">${alHas(sgxSel, bellNum(p.trigger) > px ? "above" : "below", bellNum(p.trigger)) ? "Alert set at " : "Alert me at "}${anPx(bellNum(p.trigger))}</button></div>` : ""}</div>`;
   const atr = t.atr ? `<div class="sub" style="margin-top:6px">A normal day's swing is about ${anPx(t.atr)} (${fmt(t.atr / t.close * 100, 1)}%). A level less than one day's swing away can be hit by ordinary noise.</div>` : "";
   return `<div class="pf-head" style="margin-top:8px"><div class="sec">Technical read · chart as of ${anDay(t.as_of)} close</div>${anX()}</div>
     <div class="pf-kpi">
@@ -1788,7 +1797,7 @@ function scrBuild() {
     if (!inMkt({ symbol: sym })) continue;
     const r = sgxCache.res[sym], u = uni[sym], full = !!(r && r.summary);
     const s = full ? r.summary : (u && u.scan) || {}, d = (r && r.data) || {};
-    rows.push({ sym, res: true, full, s, name: scrName(d.name || r?.name || u?.name || sym), px: scrP(s.price) ?? scrP(d.price) ?? scrP(u?.price),
+    rows.push({ sym, res: true, full, s, name: scrName(d.name || r?.name || u?.name || sym), px: scrP(d.price) ?? scrP(s.price) ?? scrP(u?.price),
       cur: (s.currency || d.currency || u?.currency) === "USD" ? "US$" : "S$" });
   }
   const have = new Set(mine);
@@ -1851,17 +1860,20 @@ function scrTap(sym) {
   if (it.res) return openSgx(sym);
   scrOpen = scrOpen === sym ? "" : sym; renderScreen();
 }
+let scrHtml = ["", "", ""];   // what the filter chips, sort chips and list showed last: rebuilt only when it changes
+const scrPut = (i, id, h) => { if (h !== scrHtml[i]) { scrHtml[i] = h; $(id).innerHTML = h; } };
 function renderScreen() {
   if (!$("scr-list")) return;
-  $("scr-filters").innerHTML = SCR_F.map(([k, n]) => `<div class="chip ${k === scrF ? "sel" : ""}" style="padding:6px 12px" onclick="scrSet('f','${k}')">${n}</div>`).join("");
-  $("scr-sorts").innerHTML = SCR_S.map(([k, n]) => `<div class="chip ${k === scrS ? "sel" : ""}" style="padding:6px 12px" onclick="scrSet('s','${k}')">${n}</div>`).join("");
+  if (document.body.dataset.tab !== "sg" || curSec("sg") !== "Screener") return;   // not on screen: applySec draws it when the section opens
+  scrPut(0, "scr-filters", SCR_F.map(([k, n]) => `<div class="chip ${k === scrF ? "sel" : ""}" style="padding:6px 12px" onclick="scrSet('f','${k}')">${n}</div>`).join(""));
+  scrPut(1, "scr-sorts", SCR_S.map(([k, n]) => `<div class="chip ${k === scrS ? "sel" : ""}" style="padding:6px 12px" onclick="scrSet('s','${k}')">${n}</div>`).join(""));
   scrRows = scrBuild();
   const shown = scrRows.filter(SCR_PASS[scrF] || SCR_PASS.all).sort(scrCmp);
   const asof = scrRows.map(it => it.s.as_of).filter(Boolean).sort().pop();
   $("scr-n").textContent = scrRows.length ? shown.length + " of " + scrRows.length : "";
   $("scr-head").textContent = scrRows.length ? `${shown.length} of ${scrRows.length} stocks${asof ? " · chart as of " + scrDay(asof) : ""}` : "";
-  $("scr-list").innerHTML = shown.map(scrRow).join("") ||
-    `<div class="empty">${scrRows.length ? "No stock matches this filter right now." : pbRows.length || scrErr ? "No stocks to show yet." : "Loading…"}</div>`;
+  scrPut(2, "scr-list", shown.map(scrRow).join("") ||
+    `<div class="empty">${scrRows.length ? "No stock matches this filter right now." : pbRows.length || scrErr ? "No stocks to show yet." : "Loading…"}</div>`);
 }
 
 // ---- Tiger orders (practice account). The phone only queues a row in
@@ -2083,8 +2095,7 @@ async function loadBoard(force) {
   if (!force && Date.now() - pbAt < 55000 && pbRows.length) return;
   pbAt = Date.now();
   const cols = "symbol,market,name,sector,currency,price,price_at,quote,avg_value,avg_volume,in_pool,div_yield,hi52,lo52";
-  let { data, error } = await sb.from("tb_universe").select(cols + ",scan");
-  if (error) ({ data, error } = await sb.from("tb_universe").select(cols));   // `scan` column not added yet: prices still load
+  const { data, error } = await sb.from("tb_universe").select(cols + ",scan");
   if (error) { if (!pbRows.length) $("pb-list").innerHTML = `<div class="empty">Could not load prices.</div>`; scrErr = true; renderScreen(); return; }
   scrErr = false;
   pbRows = data || [];
@@ -2196,7 +2207,9 @@ function holdCalc(p) {
   const mine = bkData(p.symbol), px = mine && mine.price ? Number(mine.price) : p.last;
   return { ...p, name: mine && mine.name, px, val: px != null ? p.qty * px : p.value, gain: px != null && p.avg_cost != null ? p.qty * (px - p.avg_cost) : p.pnl };
 }
-async function loadHoldings() {
+let holdP = null;   // a read in flight: the Holdings card and the Portfolio view share it
+function loadHoldings() { return holdP || (holdP = holdRead().finally(() => { holdP = null; })); }
+async function holdRead() {
   const box = $("hold-body"); if (!box || document.body.dataset.tab !== "sg") return;
   let h;
   if (!getPass()) h = `<div class="empty">Holdings are private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode.</div>`;
@@ -2266,6 +2279,7 @@ const PV_KEY = "tb_pv_src";
 let pvSrc = (() => { try { return localStorage.getItem(PV_KEY) === "tiger" ? "tiger" : "journal"; } catch (_) { return "journal"; } })();
 let pvHtml = "", pvSeq = 0, pvDivSig = "", pvDivs = {};
 const PV_SYM = { SGD: "S$", USD: "US$" };
+const PV_BADPASS = "The passcode on this phone is not the right one, so your holdings cannot be read. Set it again: Alpaca bot tab, then Controls, then Passcode.";
 const pvM = (v, c, d = 0) => `${v < 0 ? "-" : ""}${PV_SYM[c] || c + " "}${fmt(Math.abs(v), d)}`;
 const pvSgd = (v, c, rate) => c === "USD" ? (rate ? v * rate : null) : v;   // value in SGD, or null when a US value has no rate
 const pvName = (p) => esc(sgxLabel({ symbol: p.symbol, name: p.name }));
@@ -2276,7 +2290,7 @@ function pfPositions(src, rows, res, uni) {
   rows.forEach(r => {
     const sym = r.symbol, rd = res[sym] && res[sym].data, u = uni[sym] || {}, qty = Number(r.qty), j = src === "journal";
     const ccy = j ? (r.currency === "USD" || (!r.currency && r.market === "US") ? "USD" : "SGD") : (r.currency === "USD" ? "USD" : "SGD");
-    const price = j ? (rd && rd.price > 0 ? Number(rd.price) : Number(u.price) > 0 ? Number(u.price) : null) : (r.px > 0 ? Number(r.px) : null);
+    const price = j ? (jrLive(sym) ?? (Number(u.price) > 0 ? Number(u.price) : null)) : (r.px > 0 ? Number(r.px) : null);
     const sec = (rd && rd.sector) || u.sector;
     const p = { symbol: sym, name: r.name || (rd && rd.name) || sym, qty, price, value: price == null ? null : price * qty, currency: ccy,
       sector: sec ? secName(sec) : "Unknown", stop: j && r.stop > 0 ? Number(r.stop) : null };
@@ -2368,9 +2382,9 @@ async function pvLoad() {
   } else {
     await loadHoldings(); if (seq !== pvSeq) return;
     if (!holdRow) {   // an empty answer can also mean a wrong passcode
-      let ok = null; try { const r = await passOk(); if (!r.error && typeof r.data === "boolean") ok = r.data; } catch (_) {}
+      const ok = await passKnown();
       if (seq !== pvSeq) return;
-      return ok === false ? msg(JR_BADPASS, "warn") : msg("No holdings data yet. Check the passcode, and that the laptop is on.");
+      return ok === false ? msg(PV_BADPASS, "warn") : msg("No holdings data yet. Check the passcode, and that the laptop is on.");
     }
     const P = (holdRow.data.positions || []).map(holdCalc);
     rows = P.filter(p => p.kind === "STK" && p.qty > 0);
@@ -2555,7 +2569,7 @@ const PLAYBOOK = {
 const dgC = { at: 0, list: null, failed: false, i: 0, p: null };
 function loadDigest() {
   if (dgC.p) return dgC.p;
-  if (dgC.at && Date.now() - dgC.at < 10 * 60 * 1000) return Promise.resolve();
+  if (dgC.at && Date.now() - dgC.at < (dgC.failed ? 60 : 600) * 1000) return Promise.resolve();   // retry a failed fetch after 1 minute, otherwise every 10
   dgC.p = (async () => {
     try {
       const { data, error } = await sb.from("tb_report").select("data").eq("key", "digest").maybeSingle();
@@ -2583,7 +2597,7 @@ function renderDigest() {
   h += `<div class="mk-head"><div class="mk-label">${esc(d.week)}</div></div>`;
   h += d.first ? `<div class="sub">First digest: this lists where each stock stands. From next week it shows what changed.</div>`
                : `<div class="sub">What changed on your list since the week before.</div>`;
-  h += `<div class="pf-kpi">${kpi("Setups on now", c.on ?? 0, "stocks")}${kpi("In an uptrend", c.uptrend ?? 0, "stocks")}${kpi(d.first ? "With a read" : "With changes", c.changed ?? stocks.length, "stocks")}</div>`;
+  h += `<div class="pf-kpi">${kpi("Setups on now", esc(c.on ?? 0), "stocks")}${kpi("In an uptrend", esc(c.uptrend ?? 0), "stocks")}${kpi(d.first ? "With a read" : "With changes", esc(c.changed ?? stocks.length), "stocks")}</div>`;
   if (c.alerts != null) h += `<div class="sub" style="margin-top:6px">Alerts that fired this week: ${esc(c.alerts)}</div>`;
   h += stocks.length ? `<div class="pf-sub">${d.first ? "Where each stock stands" : "What changed"}</div>` +
     stocks.map(s => `<div class="dg-s"><div class="dg-h"><b>${esc(s.name || s.symbol)}</b><span class="sub">${esc(shortSym(s.symbol || ""))}</span>${s.chg == null ? "" : `<span class="${s.chg >= 0 ? "up" : "down"}">${signed(s.chg, 1, true)} this week</span>`}</div>${(s.lines || []).map(x => `<div class="dg-l">${esc(x)}</div>`).join("")}</div>`).join("")
@@ -3528,12 +3542,19 @@ const journalSave = (row) => sb.from("tb_journal").insert(row).select();
 const journalClose = (id, patch) => sb.from("tb_journal").update(patch).eq("id", id).select();
 const journalDelete = (id) => sb.from("tb_journal").delete().eq("id", id).select();
 const passOk = () => sb.rpc("tb_pass_ok");   // shared by Journal and Alerts: true or false; a private table answers a wrong passcode with an empty list
+const passMemo = { pw: null, ok: null };   // memory only: the passcode last asked about and the answer; never shown or logged
+async function passKnown() {   // true or false for the passcode on this phone now, null when it could not be asked. Asks again only when the passcode changed.
+  const pw = getPass();
+  if (passMemo.pw === pw && passMemo.ok !== null) return passMemo.ok;
+  try { const r = await passOk(); if (!r.error && typeof r.data === "boolean") { passMemo.pw = pw; passMemo.ok = r.data; return r.data; } } catch (_) {}
+  return null;
+}
 const JR_PRIVATE = "Your journal is private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode.";
 const JR_BADPASS = "The passcode on this phone is not the right one, so your journal cannot be read. Set it again: Alpaca bot tab, then Controls, then Passcode.";
 const JR_NOCHANGE = "Nothing was changed: wrong passcode, or the entry no longer exists.";
 const jrErrMsg = (e) => e.message && e.message.includes("policy") ? "wrong passcode" : e.message;
 
-const jrC = { at: 0, rows: null, err: null, bad: false, pass: null, ok: null };   // pass/ok: the passcode the rpc was asked about and its answer
+const jrC = { at: 0, rows: null, err: null, bad: false, rowsPass: null };   // rowsPass: the passcode the rows were read with (memory only)
 let jrClosing = null;     // id of the open trade whose close form is showing
 const jrToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });   // Singapore date, YYYY-MM-DD
 const jrDays = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 864e5);
@@ -3542,22 +3563,18 @@ const jrMoney = (v, c) => (v < 0 ? "-" : "+") + c + fmt(Math.abs(v), 2);
 const jrPx = (v, c) => c + fmt(v, Math.abs(v) < 1 ? 3 : 2);
 const jrNum = (id) => { const v = $(id).value.trim(); return v === "" ? null : Number(v); };
 async function jrRefresh() {
+  const pw = getPass();
+  if (jrC.rowsPass !== pw) { jrC.rows = null; jrC.bad = false; }   // a different passcode: do not show what the old one read
   const { data, error } = await journalLoad();
   jrC.err = error || null;
   if (error) return;
-  jrC.rows = data || []; jrC.at = Date.now(); jrC.bad = false;
-  if (!jrC.rows.length) {   // an empty list can also mean a wrong passcode: ask once per passcode
-    const pw = getPass();
-    if (jrC.pass !== pw) {
-      try { const r = await passOk(); if (!r.error && typeof r.data === "boolean") { jrC.pass = pw; jrC.ok = r.data; } } catch (_) {}
-    }
-    jrC.bad = jrC.pass === pw && jrC.ok === false;
-  }
+  jrC.rows = data || []; jrC.at = Date.now(); jrC.bad = false; jrC.rowsPass = pw;
+  if (!jrC.rows.length) jrC.bad = await passKnown() === false;   // an empty list can also mean a wrong passcode
 }
 // open trades, kept for 60 seconds: other screens read this
 async function journalOpen() {
   if (!getPass()) return [];
-  if (!jrC.rows || Date.now() - jrC.at >= 60000) await jrRefresh();
+  if (!jrC.rows || jrC.rowsPass !== getPass() || Date.now() - jrC.at >= 60000) await jrRefresh();
   return (jrC.rows || []).filter(r => !r.closed);
 }
 // the numbers behind one trade; px is the latest price (open trades) or null
@@ -3654,11 +3671,13 @@ function jrRender() {
   $("jr-closed").innerHTML = `<div class="sec" style="margin-top:16px">Closed trades</div>` + (closed.map(jrClosedRow).join("") || `<div class="empty">No closed trades yet.</div>`);
   $("jr-worked").innerHTML = jrWorked(jrStats(closed));
 }
+// no redraw while a close form is open or a journal field has focus: it would wipe what is being typed
+const jrBusy = () => { const a = document.activeElement; return jrClosing != null || !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.closest("#jr-main")); };
 async function loadJournal() {
   if (document.body.dataset.tab !== "sg") return;
-  jrRender();
+  if (!jrBusy()) jrRender();
   if (!getPass()) return;
-  await jrRefresh(); jrRender();
+  await jrRefresh(); if (!jrBusy()) jrRender();
 }
 // the page poll: skip it while a close form is open so nothing typed is lost
 const jrTick = () => { if (curSec("sg") === "Journal" && jrClosing == null) loadJournal(); };
@@ -3744,7 +3763,7 @@ const AL_BADPASS = "The passcode on this phone is not the right one, so your ale
 const AL_NOCHANGE = "Nothing was changed: wrong passcode, or the alert no longer exists.";
 const alErrMsg = (e) => e.message && e.message.includes("policy") ? "wrong passcode" : e.message;
 
-const alC = { at: 0, rows: null, log: null, err: null, bad: false, pass: null, ok: null, busy: false, sig: "" };
+const alC = { at: 0, rows: null, log: null, err: null, bad: false, rowsPass: null, busy: false, sig: "" };   // rowsPass: the passcode the rows were read with (memory only)
 const alSt = {};          // symbol -> { px: what was typed, err: the last refusal }
 const alS = (sym) => alSt[sym] || (alSt[sym] = { px: "", err: "" });
 const alR = (v) => Math.round(Number(v) * 1e4) / 1e4;
@@ -3752,26 +3771,22 @@ const alCur = (sym) => { const r = sgxCache.res[sym], c = r && r.data && r.data.
 const alMoney = (sym, v) => alCur(sym) + fmt(v, Math.abs(v) < 1 ? 3 : 2);
 const alName = (r) => r.name || shortSym(r.symbol);
 const alWhen = (iso) => new Date(iso).toLocaleString("en-SG", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "Asia/Singapore" });
-const alActive = () => (alC.rows || []).filter(r => r.active);
+const alActive = () => getPass() && !alC.bad ? (alC.rows || []).filter(r => r.active) : [];   // no passcode, no cached levels
 const alHas = (sym, kind, level) => alActive().some(r => r.symbol === sym && r.kind === kind && alR(r.level) === alR(level));
 const alEvOn = (sym) => alActive().some(r => r.symbol === sym && r.kind === "events");
 
 async function alRefresh() {
+  const pw = getPass();
+  if (alC.rowsPass !== pw) { alC.rows = null; alC.log = null; alC.bad = false; }   // a different passcode: do not show what the old one read
   const [a, l] = await Promise.all([alertsLoad(), alertLogLoad()]);
   alC.err = a.error || l.error || null;
   if (alC.err) return;
-  alC.rows = a.data || []; alC.log = l.data || []; alC.at = Date.now(); alC.bad = false;
-  if (!alC.rows.length && !alC.log.length) {   // an empty list can also mean a wrong passcode: ask once per passcode
-    const pw = getPass();
-    if (alC.pass !== pw) {
-      try { const r = await passOk(); if (!r.error && typeof r.data === "boolean") { alC.pass = pw; alC.ok = r.data; } } catch (_) {}
-    }
-    alC.bad = alC.pass === pw && alC.ok === false;
-  }
+  alC.rows = a.data || []; alC.log = l.data || []; alC.at = Date.now(); alC.bad = false; alC.rowsPass = pw;
+  if (!alC.rows.length && !alC.log.length) alC.bad = await passKnown() === false;   // an empty list can also mean a wrong passcode
 }
 async function alEnsure(force) {
   if (document.body.dataset.tab !== "sg") return;
-  if (getPass() && !alC.busy && (force || !alC.rows || Date.now() - alC.at >= 30000)) {
+  if (getPass() && !alC.busy && (force || !alC.rows || alC.rowsPass !== getPass() || Date.now() - alC.at >= 30000)) {
     alC.busy = true;
     try { await alRefresh(); } catch (_) { alC.err = alC.err || { message: "offline" }; } finally { alC.busy = false; }
   }
@@ -3806,9 +3821,8 @@ function alBlock() {
       <div class="sub" style="margin-top:6px">A price alert fires once, then moves to the Alerts section. These are messages about what happened, not advice.</div></div>`;
   }
   if (box.dataset.h === h) return;
-  const keep = document.activeElement && document.activeElement.id === "al-px" ? [document.activeElement.selectionStart] : null;
+  if (document.activeElement && document.activeElement.id === "al-px") return;   // never rebuild under a price being typed
   box.dataset.h = h; box.innerHTML = h;
-  if (keep && $("al-px")) { $("al-px").focus(); try { $("al-px").setSelectionRange(keep[0], keep[0]); } catch (_) {} }
 }
 // one price alert; the direction comes from comparing with the latest price. Returns true when it was saved.
 async function alSet(sym, level, fromBox) {
@@ -3835,10 +3849,11 @@ const alSetBox = () => { const v = $("al-px").value.trim(); return alSet(sgxSel,
 const alBell = (level) => alSet(sgxSel, alR(level), false);
 async function alEvents(on) {
   const sym = sgxSel, row = sgxCache.res[sym];
-  if (!await needPass()) { alBlock(); return; }
+  const redraw = async () => { const b = $("sgx-alerts"); if (b) b.dataset.h = ""; await alEnsure(true); };   // so the switch shows what is really stored
+  if (!await needPass()) { await redraw(); return; }
   const { data, error } = await alertEventsSet(sym, row ? sgxLabel(row) : null, on);
-  if (error) { toast("Not saved: " + alErrMsg(error)); await alEnsure(true); return; }
-  if (!data || !data.length) { toast(AL_NOCHANGE); await alEnsure(true); return; }
+  if (error) { toast("Not saved: " + alErrMsg(error)); await redraw(); return; }
+  if (!data || !data.length) { toast(AL_NOCHANGE); await redraw(); return; }
   toast(on ? "You will be told about new setups, results and dividend dates" : "Event alerts are off for this stock");
   await alEnsure(true);
 }
@@ -3896,6 +3911,7 @@ function applySec() {
   });
   $("secbar").innerHTML = SECTIONS[t].map(([n]) => `<div class="tab ${n === sec ? "on" : ""}" onclick="setSec('${n}')">${n}</div>`).join("");
   const onTab = $("secbar").querySelector(".tab.on"); if (onTab) onTab.scrollIntoView({ block: "nearest", inline: "nearest" });
+  renderScreen();
   if (t === "sg" && sec === "Baskets" && bkChart) { const el = $("pf-chart"); if (el && el.clientWidth) bkChart.applyOptions({ width: el.clientWidth }); }
 }
 function setTab(t) {
