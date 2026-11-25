@@ -99,6 +99,7 @@
     .ord-f { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
     .ord-f label { display: block; font-size: 12px; color: var(--muted, #8a97a6); margin-bottom: 3px; }
     .ord-f input { width: 100%; box-sizing: border-box; }
+    .jr-in { width: 100%; box-sizing: border-box; min-width: 0; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 10px 12px; font-size: 16px; text-transform: none; }
     .ord-f select { width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 10px 8px; font-size: 15px; }
     .seg2 button.on-kind { background: var(--accent); color: #041022; }
     #ord-kind { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -494,6 +495,39 @@
     <button id="bk-buy" style="width:100%;margin-top:10px">Buy basket</button>
     <button class="ghost" id="bk-del" style="width:100%;margin-top:8px">Delete this basket</button>
     <div class="sub" style="margin-top:8px">Each stock becomes its own limit order, good for today, priced a touch above the last price so it is more likely to fill. Shares are whole numbers, so a little cash is left over. Each order pays its own minimum fee, so very small amounts lose more to fees.</div>
+    </div>
+  </div>
+
+  <div class="card" data-tab="sg">
+    <h2 data-card="journal">Trade journal <span><span class="sub" id="jr-n"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody">
+    <div id="jr-msg"></div>
+    <div id="jr-main" style="display:none">
+    <div class="sub">A private log of your own buys: why you bought, what would make you sell, and how it went. It records what you did. It never tells you what to do.</div>
+    <div class="sec" style="margin-top:12px">Log a trade</div>
+    <div class="ord-f">
+      <div style="grid-column:1/3"><label for="jr-sym">Stock</label><select id="jr-sym"></select></div>
+    </div>
+    <div class="ord-f">
+      <div><label for="jr-date">Date bought</label><input type="date" id="jr-date" class="jr-in"></div>
+      <div><label for="jr-setup">Main reason</label><select id="jr-setup"><option value="">Pick one</option><option>Pullback in an uptrend</option><option>Breakout</option><option>Reversal pattern</option><option>Oversold bounce</option><option>Momentum turning up</option><option>Fundamentals</option><option>Dividend</option><option>Other</option></select></div>
+    </div>
+    <div class="ord-f">
+      <div><label for="jr-entry">Entry price</label><input type="number" id="jr-entry" class="jr-in" min="0" step="any" inputmode="decimal"></div>
+      <div><label for="jr-qty">Shares</label><input type="number" id="jr-qty" class="jr-in" min="0" step="any" inputmode="decimal"></div>
+    </div>
+    <div class="ord-f">
+      <div><label for="jr-stop">Stop price (optional)</label><input type="number" id="jr-stop" class="jr-in" min="0" step="any" inputmode="decimal"></div>
+      <div><label for="jr-target">Target price (optional)</label><input type="number" id="jr-target" class="jr-in" min="0" step="any" inputmode="decimal"></div>
+    </div>
+    <div class="ord-f"><div style="grid-column:1/3"><label for="jr-why">Why I bought</label><input type="text" id="jr-why" class="jr-in" maxlength="300" autocomplete="off"></div></div>
+    <div class="ord-f"><div style="grid-column:1/3"><label for="jr-sell">I will sell if</label><input type="text" id="jr-sell" class="jr-in" maxlength="300" autocomplete="off"></div></div>
+    <div class="warn" id="jr-err" role="alert" style="margin-top:8px"></div>
+    <button id="jr-save" style="width:100%;margin-top:8px">Save</button>
+    <div id="jr-open"></div>
+    <div id="jr-closed"></div>
+    <div id="jr-worked"></div>
+    </div>
     </div>
   </div>
 
@@ -1242,6 +1276,7 @@ function szRender() {
     <div class="sub" id="sz-note" style="margin-top:6px">${esc(sug.note)}</div>
     <div id="sz-out" style="margin-top:8px"></div>
     <button class="ghost" id="sz-use" style="width:100%;margin-top:8px" onclick="szUse()">Use in the Order form</button>
+    <button class="ghost" style="width:100%;margin-top:8px" onclick="szJournal()">Save to journal</button>
     <div class="sub" style="margin-top:6px">A calculator using your own numbers and rule-of-thumb defaults. It does not check your cash, fees or the lot size your broker uses: confirm those in the Tiger app.</div></div>`;
   ["risk", "entry", "stop", "target"].forEach(k => { $("sz-" + k).oninput = () => szInput(k); });
   szOut();
@@ -3055,19 +3090,206 @@ const chartRO = typeof ResizeObserver === "undefined" ? null : new ResizeObserve
 });
 window.addEventListener("resize", () => { for (const [id, ch] of Object.entries(charts)) { const el = $(id); if (el && el.clientWidth) ch.applyOptions({ width: el.clientWidth }); } });
 
+// ---- Trade journal: a private log of the reader's own buys (table tb_journal, passcode for
+// reading and writing). It records and measures what the reader did; it never suggests anything.
+// All database calls sit in the four small functions below.
+const journalLoad = () => sb.from("tb_journal").select("*").order("opened", { ascending: false }).order("id", { ascending: false });
+const journalSave = (row) => sb.from("tb_journal").insert(row).select();
+const journalClose = (id, patch) => sb.from("tb_journal").update(patch).eq("id", id).select();
+const journalDelete = (id) => sb.from("tb_journal").delete().eq("id", id);
+const jrErrMsg = (e) => e.message && e.message.includes("policy") ? "wrong passcode" : e.message;
+
+const jrC = { at: 0, rows: null, err: null };
+let jrClosing = null;     // id of the open trade whose close form is showing
+const jrToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });   // Singapore date, YYYY-MM-DD
+const jrDays = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 864e5);
+const jrCur = (r) => r.currency === "USD" || (!r.currency && r.market === "US") ? "US$" : "S$";
+const jrMoney = (v, c) => (v < 0 ? "-" : "+") + c + fmt(Math.abs(v), 2);
+const jrPx = (v, c) => c + fmt(v, Math.abs(v) < 1 ? 3 : 2);
+const jrNum = (id) => { const v = $(id).value.trim(); return v === "" ? null : Number(v); };
+async function jrRefresh() {
+  const { data, error } = await journalLoad();
+  jrC.err = error || null;
+  if (!error) { jrC.rows = data || []; jrC.at = Date.now(); }
+}
+// open trades, kept for 60 seconds: other screens read this
+async function journalOpen() {
+  if (!getPass()) return [];
+  if (!jrC.rows || Date.now() - jrC.at >= 60000) await jrRefresh();
+  return (jrC.rows || []).filter(r => !r.closed);
+}
+// the numbers behind one trade; px is the latest price (open trades) or null
+function jrCalc(r, px) {
+  const last = r.closed ? Number(r.exit) : px, entry = Number(r.entry), qty = Number(r.qty), stop = r.stop == null ? null : Number(r.stop);
+  const out = { days: jrDays(r.opened, r.closed || jrToday()), last, pct: null, gain: null, R: null, toStop: null };
+  if (!(last > 0)) return out;
+  out.pct = (last / entry - 1) * 100; out.gain = (last - entry) * qty;
+  if (stop > 0 && stop < entry) { out.R = (last - entry) / (entry - stop); if (!r.closed) out.toStop = (last - stop) / last * 100; }
+  return out;
+}
+const jrLive = (sym) => { const w = sgxCache.wl.find(x => x.symbol === sym), res = sgxCache.res[sym]; return w && w.enabled && res && res.data && res.data.price > 0 ? Number(res.data.price) : null; };
+const jrName = (r) => sgxLabel({ symbol: r.symbol, name: r.name || r.symbol });
+const jrSignedR = (v) => (v >= 0 ? "+" : "-") + fmt(Math.abs(v), 1) + "R";
+function jrTexts(r) {
+  return `<div class="sub" style="margin-top:4px">Main reason: ${esc(r.setup || "not set")}</div>` +
+    (r.reason ? `<div>Why I bought: ${esc(r.reason)}</div>` : "") + (r.sell_if ? `<div>I will sell if: ${esc(r.sell_if)}</div>` : "");
+}
+function jrOpenRow(r) {
+  const c = jrCur(r), px = jrLive(r.symbol), k = jrCalc(r, px), ready = sgxCache.wl.length > 0;
+  const line = px == null ? `<div class="sub">${ready ? "no live price" : "Loading the latest price…"}</div>`
+    : `<div>Latest ${jrPx(px, c)} · <b class="${cls(k.gain)}">${signed(k.pct, 1, true)} (${jrMoney(k.gain, c)})</b>${k.R != null ? ` · <b class="${cls(k.R)}">${jrSignedR(k.R)}</b>` : ""}</div>`;
+  const stop = !(r.stop > 0) ? `<div class="sub">No stop set</div>`
+    : k.toStop == null ? `<div class="sub">Stop ${jrPx(Number(r.stop), c)}</div>`
+    : k.toStop > 0 ? `<div class="sub">Stop ${jrPx(Number(r.stop), c)}, ${fmt(k.toStop, 1)}% below the latest price</div>`
+    : `<div class="warn">The latest price is at or below your stop of ${jrPx(Number(r.stop), c)}.</div>`;
+  const form = jrClosing === r.id ? `<div style="margin-top:8px"><div class="ord-f">
+      <div><label for="jc-px">Exit price</label><input type="number" id="jc-px" class="jr-in" min="0" step="any" inputmode="decimal" value="${px == null ? "" : esc(px)}"></div>
+      <div><label for="jc-date">Exit date</label><input type="date" id="jc-date" class="jr-in" value="${jrToday()}"></div></div>
+      <div class="ord-f"><div style="grid-column:1/3"><label for="jc-note">What happened</label><input type="text" id="jc-note" class="jr-in" maxlength="300" autocomplete="off"></div></div>
+      <div class="warn" id="jc-err" role="alert" style="margin-top:6px"></div>
+      <div class="btns"><button onclick="jrCloseSave()">Close this trade</button><button class="ghost" onclick="jrClosing=null;jrRender()">Cancel</button></div></div>`
+    : `<div class="btns"><button class="ghost" onclick="jrClosing=${r.id};jrRender()">Close</button><button class="ghost" onclick="jrDelete(${r.id})">Delete</button></div>`;
+  return `<div class="entry"><div class="entry-h"><b>${esc(jrName(r))} <span class="sub">${esc(shortSym(r.symbol))}</span></b><span class="sub">${k.days} day${k.days === 1 ? "" : "s"} held</span></div>
+    <div>Bought ${fmt(r.qty, 0)} at ${jrPx(Number(r.entry), c)} on ${esc(anDay(r.opened))}</div>${line}${stop}${jrTexts(r)}${form}</div>`;
+}
+function jrClosedRow(r) {
+  const c = jrCur(r), k = jrCalc(r, null);
+  return `<div class="entry"><div class="entry-h"><b>${esc(jrName(r))} <span class="sub">${esc(shortSym(r.symbol))}</span></b><span class="sub">${k.days} day${k.days === 1 ? "" : "s"} held</span></div>
+    <div>${jrPx(Number(r.entry), c)} on ${esc(anDay(r.opened))} to ${jrPx(Number(r.exit), c)} on ${esc(anDay(r.closed))}</div>
+    <div>Result: <b class="${cls(k.gain)}">${signed(k.pct, 1, true)} (${jrMoney(k.gain, c)})</b>${k.R != null ? ` · <b class="${cls(k.R)}">${jrSignedR(k.R)}</b>` : ""}</div>
+    ${jrTexts(r)}${r.exit_note ? `<div>What happened: ${esc(r.exit_note)}</div>` : ""}
+    <div class="btns"><button class="ghost" onclick="jrDelete(${r.id})">Delete</button></div></div>`;
+}
+// closed trades only. Returns the stats, or null when there are none.
+function jrStats(rows) {
+  const T = rows.map(r => ({ r, k: jrCalc(r, null) }));
+  if (!T.length) return null;
+  const avg = (a) => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
+  const grp = (list) => { const w = list.filter(t => t.k.gain > 0), rs = list.map(t => t.k.R).filter(x => x != null);
+    return { n: list.length, win: list.length ? w.length / list.length : null, R: avg(rs) }; };
+  const wins = T.filter(t => t.k.gain > 0), loss = T.filter(t => t.k.gain <= 0), all = grp(T);
+  const by = {}; T.forEach(t => { const s = t.r.setup || "Not set"; (by[s] = by[s] || []).push(t); });
+  const withCtx = T.filter(t => t.r.ctx && t.r.ctx.trend);
+  const cmp = (f) => [grp(withCtx.filter(f)), grp(withCtx.filter(t => !f(t)))];
+  return { n: T.length, win: all.win, avgWin: avg(wins.map(t => t.k.pct)), avgLoss: avg(loss.map(t => t.k.pct)), avgR: all.R,
+    by: Object.entries(by).map(([s, l]) => [s, grp(l)]).sort((a, b) => b[1].n - a[1].n),
+    up: cmp(t => t.r.ctx.trend === "Uptrend"), on: cmp(t => (t.r.ctx.on || []).length > 0), noCtx: T.length - withCtx.length };
+}
+function jrWorked(S) {
+  if (!S) return `<div class="sec" style="margin-top:16px">What worked</div><div class="empty">No closed trades yet. This fills in as you close trades.</div>`;
+  const st = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v small">${v}</div></div>`;
+  const pc = (v) => v == null ? "—" : fmt(v * 100, 0) + "%", rr = (v) => v == null ? "—" : jrSignedR(v), ap = (v) => v == null ? "—" : signed(v, 1, true);
+  const row = (lab, g) => `<tr><td class="lab">${esc(lab)}</td><td class="r">${g.n}</td><td class="r">${pc(g.win)}</td><td class="r">${rr(g.R)}</td></tr>`;
+  const head = (a) => `<tr><th>${a}</th><th class="r">Trades</th><th class="r">Won</th><th class="r">Avg R</th></tr>`;
+  return `<div class="sec" style="margin-top:16px">What worked</div>
+    <div class="mini" style="grid-template-columns:repeat(2,1fr);margin-top:8px">${st("Closed trades", S.n)}${st("Won", pc(S.win))}${st("Average win", ap(S.avgWin))}${st("Average loss", ap(S.avgLoss))}${st("Average R", rr(S.avgR))}</div>
+    ${S.n < 10 ? `<div class="warn" style="margin-top:8px">Fewer than 10 closed trades: too few to judge.</div>` : ""}
+    <table class="vt" style="margin-top:10px">${head("Main reason")}${S.by.map(([s, g]) => row(s, g)).join("")}</table>
+    <table class="vt" style="margin-top:10px">${head("Chart when bought")}${row("Daily uptrend", S.up[0])}${row("Everything else", S.up[1])}${row("A setup was on", S.on[0])}${row("No setup on", S.on[1])}</table>
+    ${S.noCtx ? `<div class="sub" style="margin-top:4px">${S.noCtx} trade${S.noCtx === 1 ? "" : "s"} saved without a chart read ${S.noCtx === 1 ? "is" : "are"} left out of the two chart comparisons.</div>` : ""}
+    <div class="sub" style="margin-top:6px">R = how many times the amount you risked. Won = closed above your entry price. Money is before fees.</div>`;
+}
+function jrFillStocks() {
+  const sel = $("jr-sym"), live = sgxCache.wl.filter(r => r.enabled).sort((a, b) => inMkt(b) - inMkt(a));
+  const sig = JSON.stringify(live.map(r => r.symbol));
+  if (sel.dataset.sig === sig) { if (!sel.dataset.touched && live.some(r => r.symbol === sgxSel)) sel.value = sgxSel; return; }   // untouched: follow the stock chosen in Research
+  const keep = sel.dataset.touched ? sel.value : sgxSel; sel.dataset.sig = sig;
+  sel.innerHTML = live.map(r => `<option value="${esc(r.symbol)}">${esc(sgxLabel(sgxCache.res[r.symbol] || r))} (${esc(shortSym(r.symbol))}${r.symbol.endsWith(".SI") ? "" : ", US"})</option>`).join("") || `<option value="">Add a stock in Research first</option>`;
+  if (live.some(r => r.symbol === keep)) sel.value = keep;
+}
+function jrRender() {
+  if (!getPass()) { $("jr-msg").innerHTML = `<div class="empty">Your journal is private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode.</div>`; $("jr-main").style.display = "none"; $("jr-n").textContent = ""; return; }
+  $("jr-msg").innerHTML = ""; $("jr-main").style.display = "";
+  jrFillStocks();
+  if (!$("jr-date").value) $("jr-date").value = jrToday();
+  if (!jrC.rows) { $("jr-open").innerHTML = `<div class="empty">${jrC.err ? "Could not load your journal." : "Loading…"}</div>`; $("jr-closed").innerHTML = ""; $("jr-worked").innerHTML = ""; return; }
+  const open = jrC.rows.filter(r => !r.closed).sort((a, b) => b.opened < a.opened ? -1 : b.opened > a.opened ? 1 : b.id - a.id), closed = jrC.rows.filter(r => r.closed).sort((a, b) => b.closed < a.closed ? -1 : b.closed > a.closed ? 1 : b.id - a.id);
+  $("jr-n").textContent = `${open.length} open`;
+  $("jr-open").innerHTML = `<div class="sec" style="margin-top:16px">Open trades</div>` + (open.map(jrOpenRow).join("") || `<div class="empty">No open trades. Log one above.</div>`);
+  $("jr-closed").innerHTML = `<div class="sec" style="margin-top:16px">Closed trades</div>` + (closed.map(jrClosedRow).join("") || `<div class="empty">No closed trades yet.</div>`);
+  $("jr-worked").innerHTML = jrWorked(jrStats(closed));
+}
+async function loadJournal() {
+  if (document.body.dataset.tab !== "sg") return;
+  jrRender();
+  if (!getPass()) return;
+  await jrRefresh(); jrRender();
+}
+// the page poll: skip it while a close form is open so nothing typed is lost
+const jrTick = () => { if (curSec("sg") === "Journal" && jrClosing == null) loadJournal(); };
+async function jrSave() {
+  const err = (m) => { $("jr-err").textContent = m; };
+  const sym = $("jr-sym").value, date = $("jr-date").value, entry = jrNum("jr-entry"), qty = jrNum("jr-qty"), stop = jrNum("jr-stop"), target = jrNum("jr-target"), setup = $("jr-setup").value;
+  if (!sym) return err("Pick a stock.");
+  if (!date) return err("Pick the date you bought.");
+  if (date > jrToday()) return err("The date bought cannot be in the future.");
+  if (!(entry > 0)) return err("Enter the price you paid, above 0.");
+  if (!(qty > 0)) return err("Enter how many shares you bought, above 0.");
+  if (stop != null && !(stop > 0 && stop < entry)) return err("The stop price must be above 0 and below the entry price.");
+  if (target != null && !(target > entry)) return err("The target price must be above the entry price.");
+  if (!setup) return err("Pick a main reason.");
+  err("");
+  if (!await needPass()) return;
+  const res = sgxCache.res[sym], s = res && res.summary;
+  const ctx = s ? { price: s.price, trend: s.trend, weekly: s.weekly, on: s.on || [], near: s.near || [], pattern: s.pattern ? s.pattern.name : null, rsi: s.rsi, fa_good: s.fa_good, fa_weak: s.fa_weak } : {};
+  const row = { symbol: sym, name: res ? sgxLabel(res) : null, market: sym.endsWith(".SI") ? "SG" : "US", currency: res && res.data && res.data.currency || null,
+    opened: date, entry, qty, stop, target, setup, reason: $("jr-why").value.trim().slice(0, 300) || null, sell_if: $("jr-sell").value.trim().slice(0, 300) || null, ctx };
+  const { error } = await journalSave(row);
+  if (error) { err("Not saved: " + jrErrMsg(error)); return toast("Not saved: " + jrErrMsg(error)); }
+  ["jr-entry", "jr-qty", "jr-stop", "jr-target", "jr-why", "jr-sell"].forEach(id => { $(id).value = ""; });
+  $("jr-setup").value = ""; $("jr-date").value = jrToday();
+  toast("Saved to your journal"); await jrRefresh(); jrRender();
+}
+async function jrCloseSave() {
+  const id = jrClosing, r = (jrC.rows || []).find(x => x.id === id); if (!r) return;
+  const err = (m) => { $("jc-err").textContent = m; };
+  const px = Number($("jc-px").value), date = $("jc-date").value;
+  if (!(px > 0)) return err("Enter the price you sold at, above 0.");
+  if (!date) return err("Pick the date you sold.");
+  if (date > jrToday()) return err("The date sold cannot be in the future.");
+  if (date < r.opened) return err("The date sold cannot be before the date bought.");
+  err("");
+  if (!await needPass()) return;
+  const { error } = await journalClose(id, { closed: date, exit: px, exit_note: $("jc-note").value.trim().slice(0, 300) || null, updated_at: new Date().toISOString() });
+  if (error) { err("Not saved: " + jrErrMsg(error)); return toast("Not saved: " + jrErrMsg(error)); }
+  jrClosing = null; toast("Trade closed"); await jrRefresh(); jrRender();
+}
+async function jrDelete(id) {
+  if (!await askConfirm("Delete this journal entry for good? This cannot be undone.")) return;
+  if (!await needPass()) return;
+  const { error } = await journalDelete(id);
+  if (error) return toast("Not deleted: " + jrErrMsg(error));
+  if (jrClosing === id) jrClosing = null;
+  toast("Deleted"); await jrRefresh(); jrRender();
+}
+// from the Size block: fills the form and opens the Journal. Nothing is saved.
+function szJournal() {
+  const c = szCalc(); if (!c) return;
+  jrFillStocks();
+  if ([...$("jr-sym").options].some(o => o.value === sgxSel)) $("jr-sym").value = sgxSel;
+  const v = (id) => { const x = parseFloat($(id).value); return x > 0 ? szPx(x) : ""; };
+  $("jr-entry").value = v("sz-entry"); $("jr-stop").value = v("sz-stop"); $("jr-target").value = v("sz-target");
+  $("jr-qty").value = c.r.ok ? c.r.shares : "";
+  $("jr-err").textContent = "";
+  setSec("Journal", "sg");
+  toast("Journal form filled. Check it, then press Save.");
+}
+$("jr-save").onclick = jrSave;
+$("jr-sym").onchange = () => { $("jr-sym").dataset.touched = "1"; };
+
 // ---- Tabs by broker: the Alpaca bot (automated) and Tiger (manual, SG + US
 // stocks) are separate jobs, so each gets its own screen. Choice is remembered per device.
 const tabKey = "tb_tab";
 // Section tabs: one group of cards at a time instead of one long scroll.
 const SECTIONS = {
   us: [["Overview", ["pnl", "perf", "uschart"]], ["Trades", ["positions", "signals", "trades"]], ["Watchlist", ["watchlist"]], ["Controls", ["controls"]]],
-  sg: [["Prices", ["prices"]], ["Market", ["market"]], ["Screener", ["screen", "sgxcmp"]], ["Research", ["sgx"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Holdings", ["holdings"]]],
+  sg: [["Prices", ["prices"]], ["Market", ["market"]], ["Screener", ["screen", "sgxcmp"]], ["Research", ["sgx"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Journal", ["journal"]], ["Holdings", ["holdings"]]],
 };
 const secKey = (t) => "tb_sec_" + t;
 const curSec = (t) => { const d = SECTIONS[t][0][0]; try { const v = localStorage.getItem(secKey(t)); return SECTIONS[t].some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
 function setSec(name, t = document.body.dataset.tab || "us") {
   try { localStorage.setItem(secKey(t), name); } catch (_) {}
-  applySec(); window.scrollTo(0, 0); loadBoard(true);
+  applySec(); window.scrollTo(0, 0); loadBoard(true); jrTick();
 }
 function applySec() {
   const t = document.body.dataset.tab || "us", sec = curSec(t);
@@ -3095,7 +3317,7 @@ setMkt(mkt);
 setTab((() => { try { return localStorage.getItem(tabKey); } catch (_) { return null; } })() === "sg" ? "sg" : "us");
 
 wireCollapse();
-const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); loadMarket(); loadHoldings(); loadBoard(); };
+const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); loadMarket(); loadHoldings(); loadBoard(); jrTick(); };
 refreshAll(); setInterval(refreshAll, 15000);
 
 // ---- self-update ----------------------------------------------------------
