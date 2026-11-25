@@ -524,6 +524,7 @@
     <div class="ord-f"><div style="grid-column:1/3"><label for="jr-sell">I will sell if</label><input type="text" id="jr-sell" class="jr-in" maxlength="300" autocomplete="off"></div></div>
     <div class="warn" id="jr-err" role="alert" style="margin-top:8px"></div>
     <button id="jr-save" style="width:100%;margin-top:8px">Save</button>
+    <div class="warn" id="jr-note" style="margin-top:12px"></div>
     <div id="jr-open"></div>
     <div id="jr-closed"></div>
     <div id="jr-worked"></div>
@@ -3102,10 +3103,14 @@ window.addEventListener("resize", () => { for (const [id, ch] of Object.entries(
 const journalLoad = () => sb.from("tb_journal").select("*").order("opened", { ascending: false }).order("id", { ascending: false });
 const journalSave = (row) => sb.from("tb_journal").insert(row).select();
 const journalClose = (id, patch) => sb.from("tb_journal").update(patch).eq("id", id).select();
-const journalDelete = (id) => sb.from("tb_journal").delete().eq("id", id);
+const journalDelete = (id) => sb.from("tb_journal").delete().eq("id", id).select();
+const journalPassOk = () => sb.rpc("tb_pass_ok");   // true or false; the table itself answers a wrong passcode with an empty list
+const JR_PRIVATE = "Your journal is private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode.";
+const JR_BADPASS = "The passcode on this phone is not the right one, so your journal cannot be read. Set it again: Alpaca bot tab, then Controls, then Passcode.";
+const JR_NOCHANGE = "Nothing was changed: wrong passcode, or the entry no longer exists.";
 const jrErrMsg = (e) => e.message && e.message.includes("policy") ? "wrong passcode" : e.message;
 
-const jrC = { at: 0, rows: null, err: null };
+const jrC = { at: 0, rows: null, err: null, bad: false, pass: null, ok: null };   // pass/ok: the passcode the rpc was asked about and its answer
 let jrClosing = null;     // id of the open trade whose close form is showing
 const jrToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });   // Singapore date, YYYY-MM-DD
 const jrDays = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 864e5);
@@ -3116,7 +3121,15 @@ const jrNum = (id) => { const v = $(id).value.trim(); return v === "" ? null : N
 async function jrRefresh() {
   const { data, error } = await journalLoad();
   jrC.err = error || null;
-  if (!error) { jrC.rows = data || []; jrC.at = Date.now(); }
+  if (error) return;
+  jrC.rows = data || []; jrC.at = Date.now(); jrC.bad = false;
+  if (!jrC.rows.length) {   // an empty list can also mean a wrong passcode: ask once per passcode
+    const pw = getPass();
+    if (jrC.pass !== pw) {
+      try { const r = await journalPassOk(); if (!r.error && typeof r.data === "boolean") { jrC.pass = pw; jrC.ok = r.data; } } catch (_) {}
+    }
+    jrC.bad = jrC.pass === pw && jrC.ok === false;
+  }
 }
 // open trades, kept for 60 seconds: other screens read this
 async function journalOpen() {
@@ -3173,7 +3186,7 @@ function jrStats(rows) {
   const avg = (a) => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
   const grp = (list) => { const w = list.filter(t => t.k.gain > 0), rs = list.map(t => t.k.R).filter(x => x != null);
     return { n: list.length, win: list.length ? w.length / list.length : null, R: avg(rs) }; };
-  const wins = T.filter(t => t.k.gain > 0), loss = T.filter(t => t.k.gain <= 0), all = grp(T);
+  const wins = T.filter(t => t.k.gain > 0), loss = T.filter(t => t.k.gain < 0), all = grp(T);
   const by = {}; T.forEach(t => { const s = t.r.setup || "Not set"; (by[s] = by[s] || []).push(t); });
   const withCtx = T.filter(t => t.r.ctx && t.r.ctx.trend);
   const cmp = (f) => [grp(withCtx.filter(f)), grp(withCtx.filter(t => !f(t)))];
@@ -3193,7 +3206,7 @@ function jrWorked(S) {
     <table class="vt" style="margin-top:10px">${head("Main reason")}${S.by.map(([s, g]) => row(s, g)).join("")}</table>
     <table class="vt" style="margin-top:10px">${head("Chart when bought")}${row("Daily uptrend", S.up[0])}${row("Everything else", S.up[1])}${row("A setup was on", S.on[0])}${row("No setup on", S.on[1])}</table>
     ${S.noCtx ? `<div class="sub" style="margin-top:4px">${S.noCtx} trade${S.noCtx === 1 ? "" : "s"} saved without a chart read ${S.noCtx === 1 ? "is" : "are"} left out of the two chart comparisons.</div>` : ""}
-    <div class="sub" style="margin-top:6px">R = how many times the amount you risked. Won = closed above your entry price. Money is before fees.</div>`;
+    <div class="sub" style="margin-top:6px">R = how many times the amount you risked. Won = closed above your entry price (flat trades count as not a win). Money is before fees.</div>`;
 }
 function jrFillStocks() {
   const sel = $("jr-sym"), live = sgxCache.wl.filter(r => r.enabled).sort((a, b) => inMkt(b) - inMkt(a));
@@ -3204,14 +3217,17 @@ function jrFillStocks() {
   if (live.some(r => r.symbol === keep)) sel.value = keep;
 }
 function jrRender() {
-  if (!getPass()) { $("jr-msg").innerHTML = `<div class="empty">Your journal is private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode.</div>`; $("jr-main").style.display = "none"; $("jr-n").textContent = ""; return; }
+  if (!getPass()) { $("jr-msg").innerHTML = `<div class="empty">${JR_PRIVATE}</div>`; $("jr-main").style.display = "none"; $("jr-n").textContent = ""; return; }
   $("jr-msg").innerHTML = ""; $("jr-main").style.display = "";
   jrFillStocks();
   if (!$("jr-date").value) $("jr-date").value = jrToday();
+  $("jr-note").textContent = jrC.err && jrC.rows ? "Could not refresh your journal just now. Showing the last copy." : "";
+  if (jrC.bad) { $("jr-open").innerHTML = `<div class="warn" style="margin-top:16px">${JR_BADPASS}</div>`; $("jr-closed").innerHTML = ""; $("jr-worked").innerHTML = ""; $("jr-n").textContent = ""; return; }
   if (!jrC.rows) { $("jr-open").innerHTML = `<div class="empty">${jrC.err ? "Could not load your journal." : "Loading…"}</div>`; $("jr-closed").innerHTML = ""; $("jr-worked").innerHTML = ""; return; }
   const open = jrC.rows.filter(r => !r.closed).sort((a, b) => b.opened < a.opened ? -1 : b.opened > a.opened ? 1 : b.id - a.id), closed = jrC.rows.filter(r => r.closed).sort((a, b) => b.closed < a.closed ? -1 : b.closed > a.closed ? 1 : b.id - a.id);
   $("jr-n").textContent = `${open.length} open`;
-  $("jr-open").innerHTML = `<div class="sec" style="margin-top:16px">Open trades</div>` + (open.map(jrOpenRow).join("") || `<div class="empty">No open trades. Log one above.</div>`);
+  $("jr-open").innerHTML = `<div class="sec" style="margin-top:16px">Open trades</div>` + (open.map(jrOpenRow).join("") || `<div class="empty">No open trades. Log one above.</div>`)
+    + (open.some(r => jrCalc(r, jrLive(r.symbol)).R != null) ? `<div class="sub" style="margin-top:6px">R = how many times the amount you risked.</div>` : "");
   $("jr-closed").innerHTML = `<div class="sec" style="margin-top:16px">Closed trades</div>` + (closed.map(jrClosedRow).join("") || `<div class="empty">No closed trades yet.</div>`);
   $("jr-worked").innerHTML = jrWorked(jrStats(closed));
 }
@@ -3256,21 +3272,24 @@ async function jrCloseSave() {
   if (date < r.opened) return err("The date sold cannot be before the date bought.");
   err("");
   if (!await needPass()) return;
-  const { error } = await journalClose(id, { closed: date, exit: px, exit_note: $("jc-note").value.trim().slice(0, 300) || null, updated_at: new Date().toISOString() });
+  const { data, error } = await journalClose(id, { closed: date, exit: px, exit_note: $("jc-note").value.trim().slice(0, 300) || null, updated_at: new Date().toISOString() });
   if (error) { err("Not saved: " + jrErrMsg(error)); return toast("Not saved: " + jrErrMsg(error)); }
+  if (!data || !data.length) { err(JR_NOCHANGE); return toast(JR_NOCHANGE); }
   jrClosing = null; toast("Trade closed"); await jrRefresh(); jrRender();
 }
 async function jrDelete(id) {
   if (!await askConfirm("Delete this journal entry for good? This cannot be undone.")) return;
   if (!await needPass()) return;
-  const { error } = await journalDelete(id);
+  const { data, error } = await journalDelete(id);
   if (error) return toast("Not deleted: " + jrErrMsg(error));
+  if (!data || !data.length) return toast(JR_NOCHANGE);
   if (jrClosing === id) jrClosing = null;
   toast("Deleted"); await jrRefresh(); jrRender();
 }
 // from the Size block: fills the form and opens the Journal. Nothing is saved.
 function szJournal() {
   const c = szCalc(); if (!c) return;
+  if (!getPass()) return toast(JR_PRIVATE);
   jrFillStocks();
   if ([...$("jr-sym").options].some(o => o.value === sgxSel)) $("jr-sym").value = sgxSel;
   const v = (id) => { const x = parseFloat($(id).value); return x > 0 ? szPx(x) : ""; };
