@@ -180,6 +180,7 @@
     .chartbox { width: 100%; height: 260px; margin-top: 8px; position: relative; }
     .chartbox .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
     .chart-leg { font-size: 12px; margin-top: 4px; }
+    .indbox { width: 100%; height: 130px; margin-top: 8px; }
     .chart-leg i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin: 0 4px 0 8px; }
     header h1 { font-size: 16px; font-weight: 700; letter-spacing: .3px; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
@@ -1115,7 +1116,7 @@ function sgxDetail(d) {
 const sgxAn = {};   // symbol -> { at, fa, tech }
 const anPx = (v) => v == null ? "—" : sgxCur + fmt(v, Math.abs(v) < 1 ? 3 : 2);
 const anDay = (iso) => iso ? new Date(iso + "T00:00:00Z").toLocaleDateString("en-SG", { day: "numeric", month: "short", timeZone: "UTC" }) : "";
-const anRow = (r) => `<div class="pf-m an"><div class="t"><span><i class="fl ${r.flag === "+" ? "p" : r.flag === "-" ? "m" : r.flag === "=" ? "e" : ""}"></i>${esc(r.label)}${tag(r.tag)}</span><b>${esc(r.value)}</b></div>${r.peer ? `<div class="sub pr">${esc(r.peer)}</div>` : ""}${r.why ? `<div class="sub pf-why">${esc(r.why)}</div>` : ""}</div>`;
+const anRow = (r, extra = "") => `<div class="pf-m an"><div class="t"><span><i class="fl ${r.flag === "+" ? "p" : r.flag === "-" ? "m" : r.flag === "=" ? "e" : ""}"></i>${esc(r.label)}${tag(r.tag)}</span><b>${esc(r.value)}</b></div>${r.peer ? `<div class="sub pr">${esc(r.peer)}</div>` : ""}${r.why ? `<div class="sub pf-why">${esc(r.why)}</div>` : ""}${extra}</div>`;
 const anX = () => `<button class="ghost pf-x an-x" onclick="pfToggleExplain()">${document.body.classList.contains("pf-explain") ? "Hide explanations" : "Explain"}</button>`;
 const anDots = `<span class="sub"><i class="fl p"></i>reads well &nbsp; <i class="fl m"></i>reads poorly &nbsp; <i class="fl e"></i>in between</span>`;
 const ST = { on: "ON NOW", near: "CLOSE", off: "NOT YET", forming: "FORMING", confirmed: "CONFIRMED", now: "NOW" };
@@ -1128,19 +1129,19 @@ async function sgxAnalysis(sym) {
   const row = sgxCache.res[sym]; if (!row || !sym) return;
   const c = sgxAn[sym];
   if (!c || c.at !== row.updated_at) {
-    const { data, error } = await sb.from("tb_sgx_research").select("fa:analysis->fa,tech:analysis->tech").eq("symbol", sym).maybeSingle();
+    const { data, error } = await sb.from("tb_sgx_research").select("fa:analysis->fa,tech:analysis->tech,ser:analysis->series").eq("symbol", sym).maybeSingle();
     if (error) {
       if (sym === sgxSel) ["sgx-entry", "sgx-fa", "sgx-ta"].forEach(id => { if ($(id)) $(id).innerHTML = `<div class="empty">Could not load the analysis.</div>`; });
       return;
     }
-    sgxAn[sym] = { at: row.updated_at, fa: data?.fa || null, tech: data?.tech || null };
+    sgxAn[sym] = { at: row.updated_at, fa: data?.fa || null, tech: data?.tech || null, ser: data?.ser || null };
   }
   if (sym !== sgxSel || !$("sgx-ta")) return;
   const a = sgxAn[sym], d = row.data;
   $("sgx-entry").innerHTML = anEntry(a, d);
   $("sgx-fa").innerHTML = anFa(a.fa);
-  $("sgx-ta").innerHTML = anTa(a.tech, d);
-  chartMarks();
+  $("sgx-ta").innerHTML = anTa(a.tech, d, a.ser);
+  chartMarks(); drawInd();
 }
 // Overview: the short version, so the entry read is on the first screen
 function anEntry(a, d) {
@@ -1166,14 +1167,14 @@ function anFa(f) {
     <div class="sc">${f.groups.filter(g => g.good || g.weak).map(g => `<span>${esc(short(g.name))} ${g.good ? `<b class="up">${g.good}✓</b>` : ""} ${g.weak ? `<b class="down">${g.weak}✗</b>` : ""}</span>`).join("")}</div>
     <div style="margin-top:8px">${anDots}</div>
     ${(f.notes || []).map(n => `<div class="warnnote" style="margin-top:8px">${esc(n)}</div>`).join("")}
-    ${f.groups.map(g => `<div class="pf-sub">${esc(g.name)}</div>` + g.rows.map(anRow).join("")).join("")}
+    ${f.groups.map(g => `<div class="pf-sub">${esc(g.name)}</div>` + g.rows.map(r => anRow(r)).join("")).join("")}
     ${f.years && f.years.length ? `<div class="pf-sub">The last ${f.years.length} years</div>
       <table class="vt"><tr><th>Year</th><th class="r">Sales</th><th class="r">Profit</th><th class="r">Margin</th><th class="r">Free cash</th></tr>
       ${f.years.map(y => `<tr><td class="lab">${esc(y.year)}</td><td class="r">${esc(y.revenue)}</td><td class="r">${esc(y.profit)}</td><td class="r">${esc(y.margin)}</td><td class="r">${esc(y.fcf)}</td></tr>`).join("")}</table>
       <div class="sub" style="margin-top:6px">Steady growth in sales, profit and free cash across the years says more than any single ratio.</div>` : ""}
     <div class="sub" style="margin-top:10px">The marks use common rules of thumb, or the gap to sector peers where there are peers. What is normal differs by industry, so use them to compare companies, not as buy or sell calls. Company figures from Yahoo Finance; yearly accounts refresh once a day.</div>`;
 }
-function anTa(t, d) {
+function anTa(t, d, ser) {
   if (!t) return `<div class="empty">No chart read yet: it needs 60 trading days of price history. A newly listed stock fills in over the coming weeks.</div>`;
   const px = d.price, { sup, res } = anLevels(t, px), pc = (v) => signed((v / px - 1) * 100, 1, true);
   const lrow = (x, kind) => `<tr><td class="lab">${kind}<div class="sub">${esc(x.note)}</div></td><td class="r"><b>${anPx(x.price)}</b></td><td class="r">${pc(x.price)}</td></tr>`;
@@ -1202,10 +1203,66 @@ function anTa(t, d) {
     <div class="sub pf-why" style="margin-top:6px">Support is a price where buyers have stepped in before; resistance is one where sellers have. The more times a price has turned the market, the more traders watch it. A level that breaks often swaps roles: old resistance becomes support. The nearest two each side are drawn on the chart above.</div>
     <div class="pf-sub">Chart patterns${tag("w")}</div>
     ${(t.patterns || []).length ? t.patterns.map(pat).join("") : `<div class="empty">No classic pattern on the chart right now (double top or bottom, head and shoulders, triangle, range).</div>`}
-    ${t.groups.map(g => `<div class="pf-sub">${esc(g.name)}</div>` + g.rows.map(anRow).join("")).join("")}
+    ${ser ? `<div class="sub" style="margin-top:10px">Each indicator below has its own chart under it, covering the same period as the price chart at the top (change it there: 3M, 6M, 1Y, 2Y).</div>` : ""}
+    ${t.groups.map(g => `<div class="pf-sub">${esc(g.name)}</div>` + g.rows.map(r => anRow(r, ser && IND[r.chart] ? `<div class="indbox" id="ind-${r.chart}"></div><div class="sub chart-leg">${IND[r.chart].leg}</div>` : "")).join("")).join("")}
     ${t.fib ? `<div class="pf-sub">Fibonacci levels${tag("w")}</div><div class="setup">${t.fib.levels.map(x => `${Math.round(x.r * 100)}%: <b>${anPx(x.price)}</b>`).join(" · ")}<span class="sub">${esc(t.fib.text)}</span></div>` : ""}
     ${(t.candles || []).length ? `<div class="pf-sub">Candles and gaps${tag("w")}</div>${t.candles.map(c => `<div class="setup"><b>${esc(c.name)}</b><span class="fl ${c.bias === "+" ? "p" : c.bias === "-" ? "m" : "e"}" style="margin-left:8px"></span><span class="sub">${esc(c.text)}</span></div>`).join("")}` : ""}
     <div class="sub" style="margin-top:10px"><i class="fl p"></i>bullish &nbsp; <i class="fl m"></i>bearish &nbsp; <i class="fl e"></i>neutral. Tags: <span class="tg tg-p">Predictive</span> trend and momentum, the best-supported signals · <span class="tg tg-m">Mixed evidence</span> works some of the time · <span class="tg tg-x">Weak evidence</span> widely watched, rarely reliable alone. Read from finished daily candles (Yahoo), refreshed hourly; distances use the latest price. These describe the chart, they are not advice. Signals that agree with each other, and with the fundamentals, count for more than any one line.</div>`;
+}
+// ---- Indicator charts in Technicals: one small chart under each line that has
+// one. The lines come from the research job (tradingbot/sgx/technicals.py
+// series()): the same finished candles and maths as the number on the row.
+const IC = { a: "#4da3ff", b: "#ffb84d", c: "#b48cff" };
+const icl = (c, name) => `<i style="background:${c}"></i>${name}`;
+// lines: [series key, colour, width]; guides: dashed lines; range: fixed scale; fmt: decimals, "px" (price) or "vol"
+const IND = {
+  ma: { lines: [["c", "var(--text)", 2], ["s20", IC.c], ["s50", IC.a], ["s200", IC.b]], fmt: "px",
+    leg: icl("var(--text)", "close") + icl(IC.c, "20-day") + icl(IC.a, "50-day") + icl(IC.b, "200-day average") },
+  adx: { lines: [["adx", "var(--text)", 2], ["pdi", "var(--up)"], ["mdi", "var(--down)"]], guides: [25, 20], fmt: 1,
+    leg: icl("var(--text)", "ADX, trend strength") + icl("var(--up)", "buying pressure (+DI)") + icl("var(--down)", "selling pressure (-DI)") + " · dashed lines at 25 and 20" },
+  rsi: { lines: [["rsi", IC.a, 2]], guides: [70, 30], range: [0, 100], fmt: 1,
+    leg: icl(IC.a, "RSI") + " · dashed lines at 70 (overbought) and 30 (oversold)" },
+  macd: { hist: "hist", lines: [["macd", IC.a, 2], ["sig", IC.b]], guides: [0], fmt: "px",
+    leg: icl(IC.a, "MACD") + icl(IC.b, "signal line") + " · bars = the gap between the two · dashed line = zero" },
+  stoch: { lines: [["k", IC.a, 2], ["d", IC.b]], guides: [80, 20], range: [0, 100], fmt: 1,
+    leg: icl(IC.a, "Stochastic") + icl(IC.b, "its 3-day average") + " · dashed lines at 80 (overbought) and 20 (oversold)" },
+  bb: { lines: [["c", "var(--text)", 2], ["bb_u", IC.c], ["s20", IC.b], ["bb_l", IC.c]], fmt: "px",
+    leg: icl("var(--text)", "close") + icl(IC.c, "upper and lower band") + icl(IC.b, "20-day average") },
+  atr: { lines: [["atrp", IC.a, 2]], fmt: 1, leg: icl(IC.a, "typical daily range, as % of the price") },
+  vol: { hist: "v", lines: [["v20", IC.b, 2]], fmt: "vol",
+    leg: "bars = shares traded each day, green on an up day, red on a down day" + icl(IC.b, "20-day average") },
+  obv: { lines: [["obv", IC.a, 2]], fmt: "vol", leg: icl(IC.a, "running total: up-day volume added, down-day volume taken off") },
+};
+function drawInd() {
+  Object.keys(charts).filter(id => id.startsWith("ind-")).forEach(id => { try { charts[id].remove(); } catch (_) {} delete charts[id]; });
+  const ser = sgxAn[sgxSel]?.ser;
+  if (!ser || typeof LightweightCharts === "undefined") return;
+  const T = ser.t, N = T.length, n = (RANGES.find(r => r[0] === chartRng) || RANGES[1])[1];
+  const up = cssVar("--up", "#23c47a"), dn = cssVar("--down", "#ff5c5c"), txt = cssVar("--muted", "#8a97a6");
+  const col = (c) => c.startsWith("var(") ? cssVar(c.slice(4, -1), "#e6ebf0") : c;
+  const dec = ser.c[N - 1] < 1 ? 4 : ser.c[N - 1] < 10 ? 3 : 2;
+  // a day with no value yet (indicator warming up) stays on the time axis as a blank, so every chart lines up
+  const pts = (k, color) => T.map((time, i) => ser[k][i] == null ? { time } : color ? { time, value: ser[k][i], color: color(i) } : { time, value: ser[k][i] });
+  document.querySelectorAll("#sgx-ta .indbox").forEach(el => {
+    const spec = IND[el.id.slice(4)];
+    const d = spec.fmt === "px" ? dec : spec.fmt;
+    const base = { priceLineVisible: false, priceFormat: spec.fmt === "vol" ? { type: "volume" } : { type: "price", precision: d, minMove: 1 / 10 ** d },
+      ...(spec.range ? { autoscaleInfoProvider: () => ({ priceRange: { minValue: spec.range[0], maxValue: spec.range[1] } }) } : {}) };
+    const ch = LightweightCharts.createChart(el, {
+      width: el.clientWidth || 340, height: 130,
+      // the TradingView mark stays on the price chart at the top of this screen; nine more would cover these small charts
+      layout: { background: { color: "transparent" }, textColor: txt, fontSize: 11, attributionLogo: false },
+      grid: { vertLines: { color: "transparent" }, horzLines: { color: cssVar("--line", "#2a3140") } },
+      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.08 } }, timeScale: { borderVisible: false },
+      crosshair: { mode: 0 }, handleScroll: false, handleScale: false,
+    });
+    charts[el.id] = ch; if (chartRO) chartRO.observe(el);
+    if (spec.hist) ch.addHistogramSeries({ ...base, lastValueVisible: false })
+      .setData(pts(spec.hist, (i) => (spec.hist === "v" ? i && ser.c[i] < ser.c[i - 1] : ser[spec.hist][i] < 0) ? dn + "88" : up + "88"));
+    const lines = spec.lines.map(([k, c, w], i) => { const l = ch.addLineSeries({ ...base, color: col(c), lineWidth: w || 1, lastValueVisible: i === 0 }); l.setData(pts(k)); return l; });
+    (spec.guides || []).forEach(price => lines[0].createPriceLine({ price, color: txt, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: "" }));
+    ch.timeScale().setVisibleLogicalRange({ from: Math.max(0, N - n), to: N - 1 });
+  });
 }
 // Draw the nearest levels and any forming or confirmed pattern on the Research chart
 function chartMarks() {
@@ -2688,7 +2745,7 @@ async function drawChart(id, sym) {
 }
 function setChartRng(k) {
   chartRng = k; try { localStorage.setItem(rngKey, k); } catch (_) {}
-  if (sgxSel) drawChart("sgx-chart", sgxSel);
+  if (sgxSel) { drawChart("sgx-chart", sgxSel); drawInd(); }
   if (usChartSym) drawChart("usc-chart", usChartSym);
 }
 const usKey = "tb_us_chart";
