@@ -921,15 +921,19 @@ function botReview(trades, status, spy, today) {
   inP.forEach(t => { eq += Number(t.pnl || 0); curve.push(eq); });
   const rs = inP.map(tradeR).filter(r => r != null);
   const wins = inP.filter(t => Number(t.pnl) > 0).length;
-  const botRet = (realised + unreal) / REVIEW_START_EQUITY;
-  const acct = status && status.sinceStart != null ? Number(status.sinceStart) : null;
+  const logRet = (realised + unreal) / REVIEW_START_EQUITY;
+  // Headline = the account's own since-start return (tb_status.since_start_pnl, same field and arithmetic as the P&L card).
+  // Not usable when the comparison starts later than the account did (overlap), or when it is missing: then the trade log.
+  const acct = status && status.sinceStart != null && isFinite(Number(status.sinceStart)) ? Number(status.sinceStart) : null;
+  const fromAcct = acct != null && !overlap;
+  const botRet = fromAcct ? acct / REVIEW_START_EQUITY : logRet;
   return {
     empty: inP.length === 0, start, today, overlap, weeks: Math.max(0, Math.floor(dayGap(start, today) / 7)),
     n: inP.length, nAll: rows.length, wins, winRate: inP.length ? wins / inP.length : null,
-    realised, unreal, botRet, botDD: maxDD(curve),
+    realised, unreal, logRet, fromLog: !fromAcct, botRet, botDD: maxDD(curve),
     avgR: rs.length ? mean(rs) : null, nR: rs.length, t: tStat(rs),
     spy: spyOut, diff: spyOut ? botRet - spyOut.ret : null,
-    acctGap: acct != null && isFinite(acct) ? (acct - (realised + unreal)) / REVIEW_START_EQUITY : null,
+    gap: fromAcct ? botRet - logRet : null,
   };
 }
 const reviewCache = { at: 0, trades: null, spy: null };
@@ -963,15 +967,15 @@ function renderReview(r) {
   let h = `<div class="sub" style="margin:4px 0"><b>Bot vs just holding SPY</b>, ${reviewDay(r.start)} to ${reviewDay(r.today)}</div>`;
   if (r.overlap) h += `<div class="sub">The stored SPY history starts on ${reviewDay(r.start)}, after the first trade, so both are compared from that date.</div>`;
   h += `<table><tr><th></th><th class="r">Bot</th><th class="r">SPY</th></tr>
-    <tr><td>Return</td><td class="r">${reviewPct(r.botRet)}</td><td class="r">${reviewPct(r.spy && r.spy.ret)}</td></tr>
+    <tr><td>Return</td><td class="r">${reviewPct(r.botRet)}${r.fromLog ? `<div class="sub">from the trade log</div>` : ""}</td><td class="r">${reviewPct(r.spy && r.spy.ret)}</td></tr>
     <tr><td>Worst fall from a peak</td><td class="r down">${signed(r.botDD * 100, 2, true)}</td><td class="r ${r.spy ? "down" : ""}">${r.spy ? signed(r.spy.dd * 100, 2, true) : "—"}</td></tr>
-    <tr><td>Trades</td><td class="r">${r.n}</td><td class="r">—</td></tr>
+    <tr><td>Trades <span class="sub">(from the ${r.n} logged trades)</span></td><td class="r">${r.n}</td><td class="r">—</td></tr>
     <tr><td>Win rate</td><td class="r">${Math.round(r.winRate * 100)}%</td><td class="r">—</td></tr>
     <tr><td>Average R</td><td class="r ${cls(r.avgR)}">${r.avgR == null ? "—" : signed(r.avgR, 2) + "R"}</td><td class="r">—</td></tr></table>
-    <div class="sub" style="margin-top:6px">Bot return = closed-trade profit plus open profit, over $${fmt(REVIEW_START_EQUITY, 0)}. ${r.spy ? `SPY uses ${r.spy.dividends ? "dividend-adjusted closes (dividends included)" : "plain closes (dividends not included)"}, ${reviewDay(r.spy.from)} to ${reviewDay(r.spy.to)}.` : "SPY price history is not available yet, so there is no comparison."}</div>
+    <div class="sub" style="margin-top:6px">Bot return = the account's gain since the $${fmt(REVIEW_START_EQUITY, 0)} start${r.fromLog ? " (here taken from the trade log: closed-trade profit plus open profit)" : ""}. ${r.spy ? `SPY uses ${r.spy.dividends ? "dividend-adjusted closes (dividends included)" : "plain closes (dividends not included)"}, ${reviewDay(r.spy.from)} to ${reviewDay(r.spy.to)}.` : "SPY price history is not available yet, so there is no comparison."}</div>
     <div class="sub">The bot's worst fall is measured trade by trade; SPY's day by day, so the two are not exactly like for like.</div>
     <div class="sub">This block counts all ${r.n} closed trades${r.overlap ? " in this period" : ""}; the figures further down this card cover only the latest 50.</div>`;
-  if (r.acctGap != null && Math.abs(r.acctGap) >= 0.0025) h += `<div class="sub">The account's own since-start figure differs from the closed-trade records by ${signed(r.acctGap * 100, 2, true)} of $${fmt(REVIEW_START_EQUITY, 0)}, so some profit or loss is not in those records.</div>`;
+  if (r.gap != null && Math.abs(r.gap) >= 0.0025) h += `<div class="sub">The trade log explains ${signed(r.logRet * 100, 2, true)} of that (closed trades ${signed(r.realised, 0)} plus open positions ${signed(r.unreal, 0)}). The rest, ${signed(r.gap * 100, 2, true)}, is not in the log: for example trades from before the log began, fees, or interest.</div>`;
   h += `<div class="sub" style="margin:10px 0 4px"><b>Is the edge real yet?</b></div>
     <div class="sub">${wk} of paper trading, ${r.n} closed trades.</div>
     <div class="sub">t-statistic of the per-trade R values: ${tLine}</div>
