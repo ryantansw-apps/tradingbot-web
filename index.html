@@ -1130,7 +1130,7 @@ function sgxDetail(d) {
     <div class="sub" style="margin-top:4px">Headlines naming ${esc(sgxLabel(d))} in the last 30 days, newest first. Tap one to read it on the news site.</div>
     <button class="ghost" style="width:100%;margin-top:10px" onclick="setSec('Order','sg')">Trade ${esc(shortSym(d.symbol))} ›</button>
     <div class="itabs" id="sgx-itabs">${SGX_ISECS.map(([k, n]) => `<button data-ik="${k}" onclick="setISec('${k}')">${n}</button>`).join("")}</div>
-    <div data-isec="overview"><div id="sgx-entry"><div class="empty">Loading the entry check…</div></div><div class="sec">What's moving it</div>${fac}<div class="sec">Profitability and price</div>${prof}</div>
+    <div data-isec="overview"><div id="sgx-entry"><div class="empty">Loading the entry check…</div></div><div id="sz-box"></div><div class="sec">What's moving it</div>${fac}<div class="sec">Profitability and price</div>${prof}</div>
     <div data-isec="fa"><div id="sgx-fa"><div class="empty">Loading fundamentals…</div></div><div class="sec">Valuation vs peers and market</div>${vt}${peersT ? `<div class="sec">Peers</div>${peersT}` : ""}</div>
     <div data-isec="ta"><div id="sgx-ta"><div class="empty">Reading the chart…</div></div></div>
     <div data-isec="ratios"><div id="sgx-ratios"><div class="empty">Working out the ratios…</div></div></div>
@@ -1159,7 +1159,7 @@ async function sgxAnalysis(sym) {
   if (!c || c.at !== row.updated_at) {
     const { data, error } = await sb.from("tb_sgx_research").select("fa:analysis->fa,tech:analysis->tech,ser:analysis->series").eq("symbol", sym).maybeSingle();
     if (error) {
-      if (sym === sgxSel) ["sgx-entry", "sgx-fa", "sgx-ta"].forEach(id => { if ($(id)) $(id).innerHTML = `<div class="empty">Could not load the analysis.</div>`; });
+      if (sym === sgxSel) ["sgx-entry", "sz-box", "sgx-fa", "sgx-ta"].forEach(id => { if ($(id)) $(id).innerHTML = `<div class="empty">Could not load the analysis.</div>`; });
       return;
     }
     sgxAn[sym] = { at: row.updated_at, fa: data?.fa || null, tech: data?.tech || null, ser: data?.ser || null };
@@ -1167,6 +1167,7 @@ async function sgxAnalysis(sym) {
   if (sym !== sgxSel || !$("sgx-ta")) return;
   const a = sgxAn[sym], d = row.data;
   $("sgx-entry").innerHTML = anEntry(a, d);
+  szRender();
   $("sgx-fa").innerHTML = anFa(a.fa);
   $("sgx-ta").innerHTML = anTa(a.tech, d, a.ser);
   chartMarks(); drawInd();
@@ -1193,6 +1194,94 @@ function anEntry(a, d) {
   } else h += `<div class="sub">No chart read yet: it needs 60 trading days of price history.</div>`;
   if (f && f.groups.length) h += `<div>Fundamentals: <b class="up">${f.good} read well</b> · <b class="down">${f.weak} read poorly</b></div>`;
   return h + `<div class="btns"><button class="ghost" onclick="setISec('ta')">Technicals ›</button><button class="ghost" onclick="setISec('fa')">Fundamentals ›</button></div></div>`;
+}
+// ---- Size a trade: a calculator for a buy, from the reader's own numbers. It only
+// FILLS the Order form; it never reviews or queues anything.
+function sizeCalc({ risk, entry, stop, target, lot, atr }) {
+  const pos = (v) => typeof v === "number" && isFinite(v) && v > 0;
+  const bad = (msg) => ({ ok: false, msg, perShare: null, shares: 0, cost: null, riskUsed: null, stopPct: null, stopAtr: null, rr: null });
+  lot = pos(lot) ? lot : 1;
+  if (!pos(risk) || !pos(entry) || !pos(stop)) return bad("Enter the amount, the entry price and the stop price.");
+  if (stop >= entry) return bad("For a buy, the stop price must be below the entry price.");
+  const perShare = entry - stop, shares = Math.floor(risk / perShare / lot + 1e-9) * lot;
+  if (shares === 0) return bad(`That amount is too small for one lot of ${lot} at this stop. Raise the amount or move the stop closer.`);
+  return { ok: true, msg: "", perShare, shares, cost: shares * entry, riskUsed: shares * perShare, stopPct: perShare / entry * 100,
+    stopAtr: pos(atr) ? perShare / atr : null, rr: pos(target) && target > entry ? (target - entry) / perShare : null };
+}
+const szSt = {};   // symbol -> typed values (kept while the detail is rebuilt by the poll)
+const szDown = (p) => { const t = bkTick(p); return Math.round(Math.floor(p / t + 1e-9) * t * 1000) / 1000; };
+const szPx = (v) => v == null || !isFinite(v) ? "" : String(Math.round(v * 1000) / 1000);
+const szRiskKey = (cur) => "tb_sz_risk_" + cur;
+// suggested stop and target from the chart read, in the order the brief gives
+function szSuggest(t, px) {
+  if (!t || !(px > 0)) return { stop: null, target: null, note: "No chart read yet, so no suggested stop: type your own." };
+  const atr = t.atr > 0 ? t.atr : null, { sup, res } = anLevels(t, px);
+  const pat = (t.patterns || []).find(p => (p.status === "forming" || p.status === "confirmed") && p.bias === "+");
+  const out = { stop: null, target: null, note: "" };
+  if (pat && pat.invalid > 0 && pat.invalid < px) { out.stop = szDown(pat.invalid); out.note = `Suggested stop: the price that breaks the ${pat.name}.`; }
+  else if (sup[0]) { const s = sup[0].price - (atr ? atr / 2 : 0); if (s > 0 && s < px) { out.stop = szDown(s); out.note = `Suggested stop: just under the nearest support, ${anPx(sup[0].price)}.`; } }
+  if (out.stop == null && atr && px - 2 * atr > 0) { out.stop = szDown(px - 2 * atr); out.note = "Suggested stop: two normal daily swings below the price: there is no support below in the past year."; }
+  if (out.stop == null) out.note = "No suggested stop: type your own.";
+  if (pat && pat.target > px) out.target = szDown(pat.target);
+  else if (res[0]) out.target = szDown(res[0].price);
+  return out;
+}
+function szRender() {
+  const box = $("sz-box"), row = sgxCache.res[sgxSel]; if (!box) return;
+  if (!row) { box.innerHTML = ""; return; }
+  const d = row.data, a = sgxAn[sgxSel], sug = szSuggest(a && a.tech, d.price), cur = d.currency === "USD" ? "US$" : "S$";
+  const s = szSt[sgxSel] || (szSt[sgxSel] = {});
+  if (s.risk == null) { try { s.risk = localStorage.getItem(szRiskKey(cur)) || ""; } catch (_) { s.risk = ""; } }
+  const val = (k, dflt) => s[k] != null ? s[k] : szPx(dflt);
+  box.innerHTML = `<div class="entry"><div class="entry-h"><b>Size a trade</b><span class="sub">for a buy</span></div>
+    <div class="sub">How many shares fit the amount you are willing to lose, if the price falls to your stop.</div>
+    <div class="ord-f"><div style="grid-column:1/3"><label for="sz-risk">Most I am willing to lose on this trade (${cur})</label><input type="number" id="sz-risk" min="0" step="any" inputmode="decimal" value="${esc(s.risk)}"></div></div>
+    <div class="ord-f"><div><label for="sz-entry">Entry price</label><input type="number" id="sz-entry" min="0" step="any" inputmode="decimal" value="${esc(val("entry", d.price))}"></div>
+      <div><label for="sz-stop">Stop price</label><input type="number" id="sz-stop" min="0" step="any" inputmode="decimal" value="${esc(val("stop", sug.stop))}"></div></div>
+    <div class="ord-f"><div><label for="sz-target">Target price</label><input type="number" id="sz-target" min="0" step="any" inputmode="decimal" value="${esc(val("target", sug.target))}"></div><div></div></div>
+    <div class="sub" id="sz-note" style="margin-top:6px">${esc(sug.note)}</div>
+    <div id="sz-out" style="margin-top:8px"></div>
+    <button class="ghost" id="sz-use" style="width:100%;margin-top:8px" onclick="szUse()">Use in the Order form</button>
+    <div class="sub" style="margin-top:6px">A calculator using your own numbers and rule-of-thumb defaults. It does not check your cash, fees or the lot size your broker uses: confirm those in the Tiger app.</div></div>`;
+  ["risk", "entry", "stop", "target"].forEach(k => { $("sz-" + k).oninput = () => szInput(k); });
+  szOut();
+}
+function szInput(k) {
+  const s = szSt[sgxSel]; if (!s) return;
+  const el = $("sz-" + k); s[k] = el.value;
+  if (k === "risk") { const d = sgxCache.res[sgxSel]?.data; try { localStorage.setItem(szRiskKey(d && d.currency === "USD" ? "US$" : "S$"), el.value); } catch (_) {} }
+  szOut();
+}
+// the numbers behind the block; null when the stock has no data yet
+function szCalc() {
+  const row = sgxCache.res[sgxSel]; if (!row || !$("sz-risk")) return null;
+  const d = row.data, n = (id) => parseFloat($(id).value), cur = d.currency === "USD" ? "US$" : "S$", lot = sgxSel.endsWith(".SI") ? 100 : 1;
+  const a = sgxAn[sgxSel], atr = a && a.tech && a.tech.atr > 0 ? a.tech.atr : null;
+  return { cur, lot, r: sizeCalc({ risk: n("sz-risk"), entry: n("sz-entry"), stop: n("sz-stop"), target: n("sz-target"), lot, atr }) };
+}
+function szOut() {
+  const o = $("sz-out"), c = szCalc(); if (!o || !c) return;
+  const r = c.r, m = (v) => c.cur + fmt(v, 2);
+  if (!r.ok) { o.innerHTML = `<div class="sub">${esc(r.msg)}</div>`; return; }
+  o.innerHTML = `<div>Shares: <b>${r.shares}</b>${c.lot > 1 ? ` (${r.shares / c.lot} lots of ${c.lot})` : ""}</div>
+    <div>Cost: <b>${m(r.cost)}</b></div>
+    <div>If the stop is hit you lose about <b class="down">${m(r.riskUsed)}</b></div>
+    <div>Stop is ${fmt(r.stopPct, 1)}% below the entry${r.stopAtr != null ? `, ${fmt(r.stopAtr, 1)} normal daily swings away` : ""}</div>
+    ${r.stopAtr != null && r.stopAtr < 1 ? `<div class="warn">Less than one normal day's swing: ordinary noise can hit this stop.</div>` : ""}
+    <div>${r.rr != null ? `Reward against risk: <b>${fmt(r.rr, 1)} to 1</b>` : `<span class="sub">Add a target price to see reward against risk.</span>`}</div>`;
+}
+// Fills the existing Order card and opens it. Nothing is reviewed, confirmed or queued here:
+// the reader still presses Review order and confirms it themselves.
+function szUse() {
+  const c = szCalc(); if (!c) return;
+  if (!c.r.ok) return toast(c.r.msg);
+  ordSetKind("stock");
+  ordFor = sgxSel;     // so ordStock keeps the limit price below instead of resetting it to the last price
+  $("ord-qty").value = c.r.shares;
+  $("ord-px").value = szPx(parseFloat($("sz-entry").value));
+  ordSetSide("BUY");
+  setSec("Order", "sg");
+  toast("Order form filled. Check it, then press Review order.");
 }
 function anFa(f) {
   if (!f || !f.groups.length) return `<div class="empty">No company figures on file for this stock yet.</div>`;
