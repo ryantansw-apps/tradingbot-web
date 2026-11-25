@@ -2212,7 +2212,7 @@ function loadHoldings() { return holdP || (holdP = holdRead().finally(() => { ho
 async function holdRead() {
   const box = $("hold-body"); if (!box || document.body.dataset.tab !== "sg") return;
   let h;
-  if (!getPass()) h = `<div class="empty">Holdings are private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode.</div>`;
+  if (!getPass()) { holdRow = null; h = `<div class="empty">Holdings are private. Enter the operator passcode first: Alpaca bot tab, then Controls, then Passcode.</div>`; }
   else {
     const { data, error } = await sb.from("tb_tiger_holdings").select("*").eq("mode", ORD_MODE);
     holdRow = error ? null : (data || [])[0] || null;
@@ -3675,8 +3675,8 @@ function jrRender() {
 const jrBusy = () => { const a = document.activeElement; return jrClosing != null || !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.closest("#jr-main")); };
 async function loadJournal() {
   if (document.body.dataset.tab !== "sg") return;
+  if (!getPass()) { jrRender(); return; }   // no passcode: never leave the private form showing
   if (!jrBusy()) jrRender();
-  if (!getPass()) return;
   await jrRefresh(); if (!jrBusy()) jrRender();
 }
 // the page poll: skip it while a close form is open so nothing typed is lost
@@ -3784,24 +3784,24 @@ async function alRefresh() {
   alC.rows = a.data || []; alC.log = l.data || []; alC.at = Date.now(); alC.bad = false; alC.rowsPass = pw;
   if (!alC.rows.length && !alC.log.length) alC.bad = await passKnown() === false;   // an empty list can also mean a wrong passcode
 }
-async function alEnsure(force) {
+async function alEnsure(force, user) {   // user: this redraw follows the reader's own action
   if (document.body.dataset.tab !== "sg") return;
   if (getPass() && !alC.busy && (force || !alC.rows || alC.rowsPass !== getPass() || Date.now() - alC.at >= 30000)) {
     alC.busy = true;
     try { await alRefresh(); } catch (_) { alC.err = alC.err || { message: "offline" }; } finally { alC.busy = false; }
   }
-  alRender();
+  alRender(user);
 }
 // the page poll: only while the Alerts or Research screen is showing
 const alTick = () => { if (document.body.dataset.tab === "sg" && ["Alerts", "Research"].includes(curSec("sg"))) alEnsure(); };
-function alRender() {
-  alCard(); alBlock();
+function alRender(user) {
+  alCard(); alBlock(user);
   const sig = getPass() && alC.rows && !alC.bad ? JSON.stringify(alActive().map(r => [r.symbol, r.kind, r.level])) : "";
   if (sig !== alC.sig) { alC.sig = sig; if ($("sgx-ta") && sgxAn[sgxSel]) sgxAnalysis(sgxSel); }   // the bells show what is already set
 }
 
 // Research Overview: this stock's alerts
-function alBlock() {
+function alBlock(user) {   // user: redraw even if the price box has focus (the poll never does)
   const box = $("sgx-alerts"); if (!box) return;
   const sym = sgxSel, row = sgxCache.res[sym];
   let h;
@@ -3821,13 +3821,13 @@ function alBlock() {
       <div class="sub" style="margin-top:6px">A price alert fires once, then moves to the Alerts section. These are messages about what happened, not advice.</div></div>`;
   }
   if (box.dataset.h === h) return;
-  if (document.activeElement && document.activeElement.id === "al-px") return;   // never rebuild under a price being typed
+  if (!user && document.activeElement && document.activeElement.id === "al-px") return;   // never rebuild under a price being typed
   box.dataset.h = h; box.innerHTML = h;
 }
 // one price alert; the direction comes from comparing with the latest price. Returns true when it was saved.
 async function alSet(sym, level, fromBox) {
   const st = alS(sym);
-  const say = (m) => { if (fromBox) { st.err = m; alBlock(); } toast(m); return false; };
+  const say = (m) => { if (fromBox) { st.err = m; alBlock(true); } toast(m); return false; };
   if (fromBox) st.err = "";
   const row = sgxCache.res[sym], px = row && row.data ? Number(row.data.price) : NaN;
   if (!(level > 0)) return say("Enter a price above 0.");
@@ -3835,27 +3835,27 @@ async function alSet(sym, level, fromBox) {
   const kind = alR(level) > alR(px) ? "above" : alR(level) < alR(px) ? "below" : null;
   if (!kind) return say("The price is already there.");
   if (!await needPass()) return false;
-  if (!alC.rows) await alEnsure(true);
+  if (!alC.rows) await alEnsure(true, true);
   if (!alC.rows) return say(alC.bad ? AL_BADPASS : "Could not load your alerts. Try again in a moment.");
   if (alHas(sym, kind, level)) return say("You already have that alert.");
   const { error } = await alertAdd({ symbol: sym, name: sgxLabel(row), kind, level: alR(level) });
   if (error) return say("Not saved: " + alErrMsg(error));
   if (fromBox) st.px = "";
   toast(`Alert set: ${kind} ${alMoney(sym, level)}`);
-  await alEnsure(true);
+  await alEnsure(true, true);
   return true;
 }
 const alSetBox = () => { const v = $("al-px").value.trim(); return alSet(sgxSel, v === "" ? NaN : Number(v), true); };
 const alBell = (level) => alSet(sgxSel, alR(level), false);
 async function alEvents(on) {
   const sym = sgxSel, row = sgxCache.res[sym];
-  const redraw = async () => { const b = $("sgx-alerts"); if (b) b.dataset.h = ""; await alEnsure(true); };   // so the switch shows what is really stored
+  const redraw = async () => { const b = $("sgx-alerts"); if (b) b.dataset.h = ""; await alEnsure(true, true); };   // so the switch shows what is really stored
   if (!await needPass()) { await redraw(); return; }
   const { data, error } = await alertEventsSet(sym, row ? sgxLabel(row) : null, on);
   if (error) { toast("Not saved: " + alErrMsg(error)); await redraw(); return; }
   if (!data || !data.length) { toast(AL_NOCHANGE); await redraw(); return; }
   toast(on ? "You will be told about new setups, results and dividend dates" : "Event alerts are off for this stock");
-  await alEnsure(true);
+  await alEnsure(true, true);
 }
 async function alRemoveRow(id) {
   if (!await askConfirm("Remove this alert?")) return;
@@ -3864,7 +3864,7 @@ async function alRemoveRow(id) {
   const { data, error } = r && r.kind === "events" ? await alertEventsSet(r.symbol, r.name, false) : await alertRemove(id);
   if (error) return toast("Not removed: " + alErrMsg(error));
   if (!data || !data.length) return toast(AL_NOCHANGE);
-  toast("Alert removed"); await alEnsure(true);
+  toast("Alert removed"); await alEnsure(true, true);
 }
 // the Alerts card: what is switched on, then the last 30 messages sent
 function alCard() {
