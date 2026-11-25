@@ -66,6 +66,9 @@
     .setup { padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.4; }
     .setup:last-child { border-bottom: 0; }
     .setup .sub { display: block; margin-top: 3px; font-size: 12.5px; }
+    .setup .trk { color: var(--muted); }
+    .setup .trk-d { margin-top: 4px; }
+    .setup .trk-d table { width: 100%; margin-top: 4px; font-size: 12px; }
     .entry { background: var(--panel2); border-radius: 12px; padding: 11px 12px; margin-top: 12px; font-size: 13px; line-height: 1.5; }
     .entry-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; }
     .entry-h b { font-size: 14px; }
@@ -1146,6 +1149,11 @@ async function sgxAnalysis(sym) {
   $("sgx-fa").innerHTML = anFa(a.fa);
   $("sgx-ta").innerHTML = anTa(a.tech, d, a.ser);
   chartMarks(); drawInd();
+  if (a.tech && !trackC.busy && (!trackC.at || Date.now() - trackC.at >= 60 * 60 * 1000)) {
+    const again = getTrack();     // Loading… shows while it runs, then the lines fill in
+    $("sgx-ta").innerHTML = anTa(a.tech, d, a.ser);
+    again.then(() => { if (sym === sgxSel && $("sgx-ta")) { $("sgx-ta").innerHTML = anTa(a.tech, d, a.ser); chartMarks(); drawInd(); } });
+  }
 }
 // Overview: the short version, so the entry read is on the first screen
 function anEntry(a, d) {
@@ -1195,13 +1203,43 @@ const anWeekly = (t) => !("weekly" in t) ? "" : !t.weekly
     ${t.weekly.rows.map(r => anRow(r)).join("")}`;
 const anRsTable = (rs) => !rs || !(rs.rows || []).length ? "" : `<table class="vt"><tr><th>Period</th><th class="r">Stock</th><th class="r">${esc(rs.label)}</th><th class="r">Gap</th></tr>
   ${rs.rows.map(x => `<tr><td class="lab">${esc(x.period)}</td><td class="r">${signed(x.stock * 100, 1, true)}</td><td class="r">${signed(x.index * 100, 1, true)}</td><td class="r"><b class="${x.gap > 0 ? "up" : x.gap < 0 ? "down" : ""}">${signed(x.gap * 100, 1, true)}</b></td></tr>`).join("")}</table>`;
+// Track record of each entry setup (tb_report 'track'): fetched once, kept for an hour
+const trackC = { at: 0, data: null, busy: false };
+async function getTrack() {
+  if (trackC.busy || (trackC.at && Date.now() - trackC.at < 60 * 60 * 1000)) return;
+  trackC.busy = true;
+  try {
+    const { data } = await sb.from("tb_report").select("data").eq("key", "track").maybeSingle();
+    trackC.data = data?.data || null;
+  } catch (_) { trackC.data = null; }
+  trackC.at = Date.now(); trackC.busy = false;
+}
+const trkSigned = (v) => signed(v, 1, true);
+// the track lines under one entry setup: this stock, then everything on your list
+function anTrack(name) {
+  if (trackC.busy && !trackC.at) return `<span class="sub trk">Loading…</span>`;
+  const T = trackC.data, sym = sgxSel; if (!T || !sym) return "";
+  const mk = sym.endsWith(".SI") ? "SG" : "US", st = T.by?.[sym], me = st?.setups?.[name], pool = T.all?.[mk]?.setups?.[name];
+  if (!st) return "";
+  const n = me?.n || 0, h20 = me?.h?.["20"], out = [];
+  out.push(n < 8 ? `On this stock, last 5 years: came on ${n} times. Too few to judge.`
+    : `On this stock, last 5 years: came on ${n} times. 20 trading days later it was up ${h20.up} of ${h20.n} times, middle result ${trkSigned(h20.med)} (any day: ${trkSigned(h20.base)}).`);
+  const p20 = pool?.h?.["20"];
+  if (p20 && p20.n) out.push(`Across your ${mk} list: ${pool.n} times, up ${Math.round(p20.up / p20.n * 100)}% of the time after 20 days, middle ${trkSigned(p20.med)} (any day: ${trkSigned(p20.base)}).`);
+  const cell = (x, k) => x && x.n ? (k === "up" ? `${x.up} of ${x.n}` : trkSigned(x[k])) : "n/a";
+  const row = (lab, o, k) => `<tr><td>${lab}</td>${["5", "20", "60"].map(h => `<td class="r">${cell(o?.h?.[h], k)}</td>`).join("")}</tr>`;
+  const table = `<details class="trk-d"><summary>5 / 20 / 60 days</summary><table class="vt"><tr><td></td><td class="r">5 days</td><td class="r">20 days</td><td class="r">60 days</td></tr>
+    ${n ? row("This stock: up", me, "up") + row("Middle", me, "med") + row("Average", me, "avg") + row("Any day", me, "base") : ""}
+    ${pool ? row(`${mk} list: up`, pool, "up") + row("Middle", pool, "med") + row("Average", pool, "avg") + row("Any day", pool, "base") : ""}</table></details>`;
+  return `<span class="sub trk">${out.map(esc).join("<br>")}</span>${table}`;
+}
 function anTa(t, d, ser) {
   if (!t) return `<div class="empty">No chart read yet: it needs 60 trading days of price history. A newly listed stock fills in over the coming weeks.</div>`;
   const px = d.price, { sup, res } = anLevels(t, px), pc = (v) => signed((v / px - 1) * 100, 1, true);
   const lrow = (x, kind) => `<tr><td class="lab">${kind}<div class="sub">${esc(x.note)}</div></td><td class="r"><b>${anPx(x.price)}</b></td><td class="r">${pc(x.price)}</td></tr>`;
   const room = sup[0] && res[0] ? (() => { const dn = 1 - sup[0].price / px, up = res[0].price / px - 1;
     return `<div class="sub" style="margin-top:6px">Room from here: <b>${fmt(dn * 100, 1)}%</b> down to the nearest support, <b>${fmt(up * 100, 1)}%</b> up to the nearest resistance, about ${fmt(up / dn, 1)} to 1. Chart readers compare these two distances: more room above than below is the better setup, but only while the support holds.</div>`; })() : "";
-  const setup = (x) => `<div class="setup"><b>${esc(x.name)}</b><span class="st ${x.state}">${ST[x.state]}</span><span class="sub">${esc(x.text)}</span></div>`;
+  const setup = (x) => `<div class="setup"><b>${esc(x.name)}</b><span class="st ${x.state}">${ST[x.state]}</span><span class="sub">${esc(x.text)}</span>${anTrack(x.name)}</div>`;
   const pat = (p) => `<div class="setup"><b>${esc(p.name)}</b><span class="st ${p.status === "confirmed" ? "on" : p.status === "forming" ? "near" : "off"}">${ST[p.status]}</span><span class="fl ${p.bias === "+" ? "p" : p.bias === "-" ? "m" : "e"}" style="margin-left:8px"></span><span class="sub">${esc(p.text)}</span></div>`;
   const atr = t.atr ? `<div class="sub" style="margin-top:6px">A normal day's swing is about ${anPx(t.atr)} (${fmt(t.atr / t.close * 100, 1)}%). A level less than one day's swing away can be hit by ordinary noise.</div>` : "";
   return `<div class="pf-head" style="margin-top:8px"><div class="sec">Technical read · chart as of ${anDay(t.as_of)} close</div>${anX()}</div>
@@ -1214,6 +1252,7 @@ function anTa(t, d, ser) {
     ${anWeekly(t)}
     <div class="pf-sub">Entry setups: is one there now?</div>
     ${t.setups.map(setup).join("")}
+    ${trackC.data?.by?.[sgxSel] ? `<div class="sub" style="margin-top:6px">Past frequencies on these stocks, no trading costs, entry at the next day's open. Small counts prove little. Not a forecast.${tag("m")}</div>` : ""}
     ${t.cautions.length ? `<div class="pf-sub">Reasons to wait</div>${t.cautions.map(c => `<div class="fac"><span class="sg m">!</span><span>${esc(c)}</span></div>`).join("")}` : ""}
     <div class="pf-sub">Key levels${tag("m")}</div>
     <table class="vt lv">${res.slice().reverse().map(x => lrow(x, "Resistance")).join("")}
