@@ -121,6 +121,14 @@
     .pb-leg i { position: absolute; left: 13px; top: -3px; width: 2px; height: 10px; background: var(--text); border-radius: 1px; }
     .pb-rng { position: relative; height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 5px; }
     .pb-rng i { position: absolute; top: -3px; width: 2px; height: 10px; background: var(--text); border-radius: 1px; }
+    .scr-row { padding: 10px 0; border-bottom: 1px solid var(--line); cursor: pointer; overflow-wrap: anywhere; }
+    .scr-row:last-child { border-bottom: 0; }
+    .scr-row .l1 { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+    .scr-row .nm { font-weight: 600; min-width: 0; }
+    .scr-row .px { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .scr-row .l2, .scr-row .l3 { font-size: 12.5px; margin-top: 3px; }
+    .scr-row .l3 { color: var(--muted); }
+    .scr-row .more { margin-top: 6px; font-size: 12px; color: var(--muted); }
     .pb-more { grid-column: 1 / -1; font-size: 12px; color: var(--muted); padding: 2px 0 2px; }
     .bk-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px 24px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
     .bk-row input { width: 100%; box-sizing: border-box; text-align: right; padding: 7px 8px; font-size: 15px; }
@@ -365,6 +373,19 @@
   <div class="card" data-tab="sg">
     <h2 data-card="market">Market now <span><span class="sub" id="mk-asof"></span> <span class="chev">▾</span></span></h2>
     <div class="cbody"><div id="mk-body"><div class="empty">Loading…</div></div></div>
+  </div>
+
+  <div class="card" data-tab="sg">
+    <h2 data-card="screen">Screener <span><span class="sub" id="scr-n"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody">
+    <div class="sub">Show:</div>
+    <div class="chips" id="scr-filters"></div>
+    <div class="sub" style="margin-top:10px">Sort by:</div>
+    <div class="chips" id="scr-sorts"></div>
+    <div class="sub" id="scr-head" style="margin-top:10px"></div>
+    <div id="scr-list" style="margin-top:4px"><div class="empty">Loading…</div></div>
+    <div class="sub" style="margin-top:10px">A filter, not a recommendation. Marks are rules of thumb; setups come from finished daily candles.</div>
+    </div>
   </div>
 
   <div class="card" data-tab="sg">
@@ -972,7 +993,7 @@ function setMkt(m) {
   $("sgx-input").placeholder = m === "US" ? "Add e.g. AAPL or MSFT" : "Add e.g. OCBC or O39";
   const live = sgxCache.wl.filter(r => r.enabled && inMkt(r));
   if (!live.some(r => r.symbol === sgxSel)) sgxSel = live[0]?.symbol || "";
-  renderSgx(); renderCmp(); ordStock(); renderMarket(); pbHtml = ""; pbRender();
+  renderSgx(); renderCmp(); renderScreen(); ordStock(); renderMarket(); pbHtml = ""; pbRender();
 }
 const pct = (x, d = 1) => x == null ? "—" : (Number(x) * 100).toFixed(d) + "%";
 let sgxCur = "S$";   // a few SGX counters trade in USD (e.g. Digital Core REIT)
@@ -990,12 +1011,12 @@ async function loadSgx() {
   const sig = JSON.stringify([wl.data, (res.data || []).map(r => r.updated_at), sgxSel]);
   if (sig === sgxCache.sig) {                // nothing changed: keep the scroll position and what was typed,
     (res.data || []).forEach(r => { const c = sgxCache.res[r.symbol]; if (c) c.data = r.data; });   // but take the 5-minute prices
-    ordLine(); return;
+    ordLine(); renderScreen(); return;
   }
   sgxCache = { wl: wl.data || [], res: Object.fromEntries((res.data || []).map(r => [r.symbol, r])), sig };
   const live = sgxCache.wl.filter(r => r.enabled && inMkt(r));
   if (!sgxSel || !live.some(r => r.symbol === sgxSel)) sgxSel = live[0]?.symbol || "";
-  renderSgx(); renderCmp(); ordStock();
+  renderSgx(); renderCmp(); renderScreen(); ordStock();
 }
 
 function renderSgx() {
@@ -1380,6 +1401,9 @@ function selSgx(sym) { sgxSel = sym; try { localStorage.setItem(sgxSelKey, sym);
 async function addSgx() {
   const sym = sgxCode($("sgx-input").value);
   if (!sym) return toast(mkt === "US" ? "Use a US ticker like AAPL" : "Use an SGX code like O39 or a name like OCBC");
+  return addSgxSym(sym);
+}
+async function addSgxSym(sym) {
   if (!await needPass()) return;
   const { error } = await sb.from("tb_sgx_watchlist").upsert({ symbol: sym, enabled: true, status: "pending", status_note: "waiting for the next hourly refresh" }, { onConflict: "symbol" });
   if (error) return toast("Add failed: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
@@ -1437,6 +1461,101 @@ function renderCmp() {
       <div class="dots">${(d.checks || [{}, {}, {}, {}]).map(c => `<i class="${c.ok === true ? "y" : c.ok === false ? "n" : ""}" title="${esc(c.label || "")}"></i>`).join("")}</div>
       <div class="val">${v == null ? "—" : m.show(v, d)}</div></div>`).join("")
     || `<div class="empty">No data yet. It appears after the next refresh.</div>`;
+}
+
+// ---- Screener: every Research stock (full data) plus every pool stock in
+// tb_universe (chart summary only), filtered and sorted on one tap. Rows come
+// from the laptop's summaries; nothing is computed here beyond ordering.
+const SCR_F = [["all", "All"], ["on", "Setup on now"], ["near", "Close to a setup"], ["up", "Uptrend"], ["os", "Oversold"], ["pat", "Pattern forming"], ["fa", "Strong fundamentals"]];
+const SCR_S = [["setups", "Setups"], ["fund", "Fundamentals"], ["trend", "Trend signals"], ["sup", "Near support"], ["rs", "Strength vs index"]];
+const scrKey = (k) => "tb_scr_" + k;
+const scrPref = (k, d, ok) => { try { const v = localStorage.getItem(scrKey(k)); return ok.some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
+let scrF = scrPref("f", "all", SCR_F), scrS = scrPref("s", "setups", SCR_S), scrOpen = "", scrErr = false, scrRows = [];
+function scrSet(k, v) { if (k === "f") scrF = v; else scrS = v; try { localStorage.setItem(scrKey(k), v); } catch (_) {} renderScreen(); }
+const scrName = (n) => String(n || "").replace(/,?\s+(Limited|Ltd\.?|Inc\.?|Incorporated|Corporation|Corp\.?|plc|PLC)$/i, "").trim();
+const scrDay = (iso) => iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+const scrN = (x) => typeof x === "number" && isFinite(x) ? x : null;
+function scrBuild() {
+  const mine = sgxCache.wl.filter(r => r.enabled).map(r => r.symbol), uni = Object.fromEntries(pbRows.map(u => [u.symbol, u]));
+  const rows = [];
+  for (const sym of mine) {
+    if (!inMkt({ symbol: sym })) continue;
+    const r = sgxCache.res[sym], u = uni[sym], full = !!(r && r.summary);
+    const s = full ? r.summary : (u && u.scan) || {}, d = (r && r.data) || {};
+    rows.push({ sym, res: true, full, s, name: scrName(d.name || r?.name || u?.name || sym), px: scrN(s.price) ?? scrN(Number(d.price)) ?? scrN(Number(u?.price)),
+      cur: (s.currency || d.currency || u?.currency) === "USD" ? "US$" : "S$" });
+  }
+  const have = new Set(mine);
+  for (const u of pbRows) {
+    if (u.market !== mkt || !u.in_pool || have.has(u.symbol)) continue;
+    rows.push({ sym: u.symbol, res: false, full: false, s: u.scan || {}, name: scrName(u.name || u.symbol), px: scrN(Number(u.price)), cur: u.currency === "USD" ? "US$" : "S$" });
+  }
+  return rows;
+}
+const scrArr = (x) => Array.isArray(x) ? x : [];
+const SCR_PASS = {
+  all: () => true,
+  on: (it) => scrArr(it.s.on).length > 0,
+  near: (it) => scrArr(it.s.near).length > 0,
+  up: (it) => it.s.trend === "Uptrend",
+  os: (it) => scrN(it.s.rsi) != null && it.s.rsi < 30,
+  pat: (it) => !!it.s.pattern,
+  fa: (it) => it.full && (it.s.fa_good || 0) >= 6 && (it.s.fa_good || 0) >= 2 * (it.s.fa_weak || 0),
+};
+// each sort gives numbers to rank by, biggest first; null = no data, goes last
+const scrBT = (s) => (s.bull || 0) - (s.bear || 0);
+const SCR_KEY = {
+  setups: (it) => [scrArr(it.s.on).length, scrArr(it.s.near).length, scrBT(it.s)],
+  fund: (it) => it.full && it.s.kind ? [(it.s.fa_good || 0) - (it.s.fa_weak || 0)] : null,
+  trend: (it) => it.s.trend ? [scrBT(it.s)] : null,
+  sup: (it) => scrN(it.s.sup) != null && it.px > 0 ? [-(it.px - it.s.sup) / it.px] : null,
+  rs: (it) => scrN(it.s.rs) != null ? [it.s.rs] : null,
+};
+function scrCmp(a, b) {
+  const ka = SCR_KEY[scrS](a), kb = SCR_KEY[scrS](b);
+  if (!ka !== !kb) return ka ? -1 : 1;
+  if (ka) for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return kb[i] - ka[i];
+  return a.name.localeCompare(b.name);
+}
+function scrRow(it) {
+  const s = it.s, open = scrOpen === it.sym, dp = it.px != null && it.px < 1 ? 3 : 2;
+  const on = scrArr(s.on), near = scrArr(s.near);
+  let l2;
+  if (!s.trend) l2 = `<span class="sub">No chart read yet.</span>`;
+  else {
+    const tc = s.trend === "Uptrend" ? "up" : s.trend === "Downtrend" ? "down" : "";
+    l2 = `<b class="${tc}">${esc(s.trend)}</b>${tag("p")}` +
+      (on.length ? ` · <span class="up">${esc(on.join(", "))}</span>${tag("m")}` : "") +
+      (near.length ? ` · <span class="sub">close: ${esc(near.join(", "))}</span>` : "") +
+      (s.pattern ? ` · ${esc(s.pattern.name)}${s.pattern.status === "forming" ? " forming" : ""}${tag("w")}` : "");
+  }
+  const l3 = it.res
+    ? (it.full && s.kind ? `<span class="up">${s.fa_good || 0}✓</span> <span class="down">${s.fa_weak || 0}✗</span>` : it.full ? "No scorecard yet" : "Waiting for the first research read")
+      + (it.full && s.weekly ? ` · Weekly trend: ${esc(s.weekly)}` : "")
+    : "Chart only. Add to Research for the full scorecard.";
+  const lv = (v) => scrN(v) == null ? "none nearby" : it.cur + fmt(v, dp);
+  const more = open && !it.res ? `<div class="more">Support ${lv(s.sup)} · Resistance ${lv(s.res)} · RSI ${scrN(s.rsi) == null ? "n/a" : fmt(s.rsi, 0)}${s.as_of ? " · chart as of " + esc(scrDay(s.as_of)) : ""}
+      <div style="margin-top:6px"><button onclick="event.stopPropagation(); addSgxSym('${esc(it.sym)}')">Add to Research</button></div></div>` : "";
+  return `<div class="scr-row" onclick="scrTap('${esc(it.sym)}')">
+    <div class="l1"><span class="nm">${esc(it.name)} <span class="sub">${esc(shortSym(it.sym))}</span></span><span class="px">${it.px == null ? "—" : it.cur + fmt(it.px, dp)}</span></div>
+    <div class="l2">${l2}</div><div class="l3">${l3}</div>${more}</div>`;
+}
+function scrTap(sym) {
+  const it = scrRows.find(x => x.sym === sym); if (!it) return;
+  if (it.res) return openSgx(sym);
+  scrOpen = scrOpen === sym ? "" : sym; renderScreen();
+}
+function renderScreen() {
+  if (!$("scr-list")) return;
+  $("scr-filters").innerHTML = SCR_F.map(([k, n]) => `<div class="chip ${k === scrF ? "sel" : ""}" style="padding:6px 12px" onclick="scrSet('f','${k}')">${n}</div>`).join("");
+  $("scr-sorts").innerHTML = SCR_S.map(([k, n]) => `<div class="chip ${k === scrS ? "sel" : ""}" style="padding:6px 12px" onclick="scrSet('s','${k}')">${n}</div>`).join("");
+  scrRows = scrBuild();
+  const shown = scrRows.filter(SCR_PASS[scrF] || SCR_PASS.all).sort(scrCmp);
+  const asof = scrRows.map(it => it.s.as_of).filter(Boolean).sort().pop();
+  $("scr-n").textContent = scrRows.length ? shown.length + " of " + scrRows.length : "";
+  $("scr-head").textContent = scrRows.length ? `${shown.length} of ${scrRows.length} stocks${asof ? " · chart as of " + scrDay(asof) : ""}` : "";
+  $("scr-list").innerHTML = shown.map(scrRow).join("") ||
+    `<div class="empty">${scrRows.length ? "No stock matches this filter right now." : pbRows.length || scrErr ? "No stocks to show yet." : "Loading…"}</div>`;
 }
 
 // ---- Tiger orders (practice account). The phone only queues a row in
@@ -1654,13 +1773,16 @@ const pbPref = (k, d, ok) => { try { const v = localStorage.getItem(k); return o
 let pbShow = pbPref("tb_pb_show", "all", PB_SHOW), pbView = pbPref("tb_pb_view", "movers", PB_VIEW);
 function pbSet(k, v) { if (k === "show") pbShow = v; else pbView = v; try { localStorage.setItem("tb_pb_" + k, v); } catch (_) {} pbRender(); }
 async function loadBoard(force) {
-  if (document.body.dataset.tab !== "sg" || curSec("sg") !== "Prices") return;
+  if (document.body.dataset.tab !== "sg" || !["Prices", "Screener"].includes(curSec("sg"))) return;
   if (!force && Date.now() - pbAt < 55000 && pbRows.length) return;
   pbAt = Date.now();
-  const { data, error } = await sb.from("tb_universe").select("symbol,market,name,sector,currency,price,price_at,quote,avg_value,avg_volume,in_pool,div_yield,hi52,lo52");
-  if (error) { if (!pbRows.length) $("pb-list").innerHTML = `<div class="empty">Could not load prices.</div>`; return; }
+  const cols = "symbol,market,name,sector,currency,price,price_at,quote,avg_value,avg_volume,in_pool,div_yield,hi52,lo52";
+  let { data, error } = await sb.from("tb_universe").select(cols + ",scan");
+  if (error) ({ data, error } = await sb.from("tb_universe").select(cols));   // `scan` column not added yet: prices still load
+  if (error) { if (!pbRows.length) $("pb-list").innerHTML = `<div class="empty">Could not load prices.</div>`; scrErr = true; renderScreen(); return; }
+  scrErr = false;
   pbRows = data || [];
-  pbRender();
+  pbRender(); renderScreen();
 }
 function pbRender() {
   const box = $("pb-list"); if (!box) return;
@@ -2849,7 +2971,7 @@ const tabKey = "tb_tab";
 // Section tabs: one group of cards at a time instead of one long scroll.
 const SECTIONS = {
   us: [["Overview", ["pnl", "perf", "uschart"]], ["Trades", ["positions", "signals", "trades"]], ["Watchlist", ["watchlist"]], ["Controls", ["controls"]]],
-  sg: [["Prices", ["prices"]], ["Market", ["market"]], ["Research", ["sgx"]], ["Compare", ["sgxcmp"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Holdings", ["holdings"]]],
+  sg: [["Prices", ["prices"]], ["Market", ["market"]], ["Screener", ["screen", "sgxcmp"]], ["Research", ["sgx"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Holdings", ["holdings"]]],
 };
 const secKey = (t) => "tb_sec_" + t;
 const curSec = (t) => { const d = SECTIONS[t][0][0]; try { const v = localStorage.getItem(secKey(t)); return SECTIONS[t].some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
