@@ -981,7 +981,7 @@ async function loadSgx() {
   if (!sgxCache.wl.length && !$("sgx-detail").innerHTML) $("sgx-detail").innerHTML = `<div class="empty">Loading…</div>`;
   const [wl, res] = await Promise.all([
     sb.from("tb_sgx_watchlist").select("*").order("added_at"),
-    sb.from("tb_sgx_research").select("symbol,name,updated_at,data"),
+    sb.from("tb_sgx_research").select("symbol,name,updated_at,data,summary"),
   ]);
   if (wl.error || res.error) { $("sgx-detail").innerHTML = `<div class="empty">Could not load research data.</div>`; return; }
   const sig = JSON.stringify([wl.data, (res.data || []).map(r => r.updated_at), sgxSel]);
