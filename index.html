@@ -1312,6 +1312,13 @@ function sgxDetail(d) {
       (NN.length > N0 ? `<div class="pb-all" onclick="sgxNewsToggle('${esc(d.symbol)}', this)">${nOpen ? "Show fewer" : `Show all ${NN.length} headlines`}</div>` : "")
     : `<div class="empty">No headlines naming this company in the last 30 days.</div>`;
 
+  const AA = Array.isArray(d.announcements) ? d.announcements.filter(a => a && a.title && /^https:\/\//.test(a.url || "")) : null, aOpen = sgxAnnOpen === d.symbol;
+  const annK = { insider: "Insider", buyback: "Buy-back", results: "Results", dividend: "Dividend" };
+  const annBlock = AA === null ? "" : `<div class="sec">Company announcements (SGX)</div>` + (AA.length ? `<div class="news ${aOpen ? "all" : ""}" id="sgx-ann">` +
+      AA.map((a, i) => `<a class="${i >= N0 ? "more" : ""}" href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}<span class="sub">${esc(annWhen(a.date))}${annK[a.kind] ? " · <b>" + annK[a.kind] + "</b>" : ""}</span></a>`).join("") + `</div>` +
+      (AA.length > N0 ? `<div class="pb-all" onclick="sgxAnnToggle('${esc(d.symbol)}', this)">${aOpen ? "Show fewer" : `Show all ${AA.length} announcements`}</div>` : "")
+    : `<div class="empty">No SGX announcements in the last 180 days.</div>`) + `<div class="sub" style="margin-top:4px">Source: SGX company announcements. Headlines and links only.</div>`;
+
   return `<div class="sgx-h"><div class="nm">${esc(d.name)} <span class="sub">${esc(d.symbol)}</span></div>
       <div class="px">${sgd(d.price)} <span class="${cls(chg)}" style="font-size:14px">${chg == null ? "" : signed(chg * 100, 2, true)}</span></div>
       <div class="sub">${d.price_at ? `price read ${esc(pxWhen(d.price_at))}${d.currency === "USD" ? "" : " (SGX about 10 min late)"} · ` : ""}${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${d.div_yield != null ? ` · <b>dividend yield ${fmt(d.div_yield, 2)}%</b>` : ""}${figH > 96 ? ` · <span class="warn">company figures ${ago(d.as_of)} old</span>` : ""}</div></div>
@@ -1320,6 +1327,7 @@ function sgxDetail(d) {
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
     <div class="sec">Latest news</div>${news}
     <div class="sub" style="margin-top:4px">Headlines naming ${esc(sgxLabel(d))} in the last 30 days, newest first. Tap one to read it on the news site.</div>
+    ${annBlock}
     <button class="ghost" style="width:100%;margin-top:10px" onclick="setSec('Order','sg')">Trade ${esc(shortSym(d.symbol))} ›</button>
     <div class="itabs" id="sgx-itabs">${SGX_ISECS.map(([k, n]) => `<button data-ik="${k}" onclick="setISec('${k}')">${n}</button>`).join("")}</div>
     <div data-isec="overview"><div id="sgx-entry"><div class="empty">Loading the entry check…</div></div><div id="sz-box"></div><div id="sgx-alerts"></div><div class="sec">What's moving it</div>${fac}<div class="sec">Profitability and price</div>${prof}</div>
@@ -1679,6 +1687,17 @@ function sgxNewsToggle(sym, el) {
   const box = $("sgx-news"); if (!box) return;
   box.classList.toggle("all", sgxNewsOpen === sym);
   el.textContent = sgxNewsOpen === sym ? "Show fewer" : `Show all ${box.children.length} headlines`;
+}
+function annWhen(day) {
+  const t = new Date(String(day) + "T00:00:00Z");
+  return isNaN(t) ? "" : t.toLocaleDateString("en-SG", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+let sgxAnnOpen = "";
+function sgxAnnToggle(sym, el) {
+  sgxAnnOpen = sgxAnnOpen === sym ? "" : sym;
+  const box = $("sgx-ann"); if (!box) return;
+  box.classList.toggle("all", sgxAnnOpen === sym);
+  el.textContent = sgxAnnOpen === sym ? "Show fewer" : `Show all ${box.children.length} announcements`;
 }
 const iKey = "tb_isec";
 let sgxISec = (() => { try { let v = localStorage.getItem(iKey); if (v === "value") v = "fa"; return SGX_ISECS.some(x => x[0] === v) ? v : "overview"; } catch (_) { return "overview"; } })();
