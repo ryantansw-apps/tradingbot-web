@@ -163,6 +163,11 @@
     .pf-hm { display: grid; gap: 2px; font-size: 10px; margin-top: 6px; }
     .pf-hm span { display: grid; place-items: center; height: 28px; border-radius: 3px; font-variant-numeric: tabular-nums; }
     .pf-hm .lab { height: auto; color: var(--muted, #8a97a6); overflow: hidden; white-space: nowrap; }
+    .dg-s { padding: 9px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+    .dg-h { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .dg-h b { font-size: 14px; overflow-wrap: anywhere; }
+    .dg-l { font-size: 13px; line-height: 1.45; padding-left: 12px; text-indent: -12px; overflow-wrap: anywhere; }
+    .dg-l::before { content: "• "; color: var(--muted); }
     .mk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 4px; }
     .mk-label { font-size: 21px; font-weight: 800; line-height: 1.2; }
     .pb { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
@@ -374,6 +379,11 @@
       <div id="pb-list" style="margin-top:4px"><div class="empty">Loading…</div></div>
       <div class="sub" style="margin-top:8px" id="pb-note"></div>
     </div>
+  </div>
+
+  <div class="card" data-tab="sg">
+    <h2 data-card="digest">This week <span><span class="sub" id="dg-asof"></span> <span class="chev">▾</span></span></h2>
+    <div class="cbody"><div id="dg-body"><div class="empty">Loading…</div></div></div>
   </div>
 
   <div class="card" data-tab="sg">
@@ -2404,6 +2414,50 @@ const PLAYBOOK = {
     ["avoid", "Selling puts for income", "Premiums look rich for a reason: this is when stocks gap down hardest.", ""],
     ["avoid", "Buying puts outright", "Insurance costs the most after the fall has started.", ""]],
 };
+// ---- "This week" digest (tb_report 'digest'): a new one arrives once a week, so it is
+// fetched at most every 10 minutes. The list is newest first; the select opens older weeks.
+const dgC = { at: 0, list: null, failed: false, i: 0, p: null };
+function loadDigest() {
+  if (dgC.p) return dgC.p;
+  if (dgC.at && Date.now() - dgC.at < 10 * 60 * 1000) return Promise.resolve();
+  dgC.p = (async () => {
+    try {
+      const { data, error } = await sb.from("tb_report").select("data").eq("key", "digest").maybeSingle();
+      if (error) throw error;
+      dgC.list = (data?.data?.list || []).filter(x => x && x.week);
+      dgC.failed = false;
+    } catch (_) { dgC.failed = true; }
+    dgC.at = Date.now(); dgC.p = null;
+    renderDigest();
+  })();
+  return dgC.p;
+}
+function dgPick(i) { dgC.i = +i || 0; renderDigest(); }
+function renderDigest() {
+  const box = $("dg-body"); if (!box) return;
+  const L = dgC.list;
+  if (!L) { box.innerHTML = `<div class="empty">${dgC.failed ? "Could not load the weekly digest." : "Loading…"}</div>`; return; }
+  if (!L.length) { $("dg-asof").textContent = ""; box.innerHTML = `<div class="empty">The first weekly digest arrives on Saturday morning.</div>`; return; }
+  const i = Math.min(dgC.i, L.length - 1), d = L[i], c = d.counts || {};
+  $("dg-asof").textContent = d.made ? "made " + anDay(d.made) : "";
+  const kpi = (l, v, sm) => `<div><span class="l">${l}</span><b>${v}</b>${sm ? `<small>${sm}</small>` : ""}</div>`;
+  const stocks = d.stocks || [], upcoming = d.upcoming || [], quiet = d.quiet || [];
+  let h = L.length > 1 ? `<div class="sub" style="margin-bottom:6px"><label for="dg-sel">Week</label>
+    <select id="dg-sel" onchange="dgPick(this.value)" style="width:100%;margin-top:4px">${L.map((x, k) => `<option value="${k}"${k === i ? " selected" : ""}>${esc(x.week)}${x.made ? ", made " + esc(anDay(x.made)) : ""}</option>`).join("")}</select></div>` : "";
+  h += `<div class="mk-head"><div class="mk-label">${esc(d.week)}</div></div>`;
+  h += d.first ? `<div class="sub">First digest: this lists where each stock stands. From next week it shows what changed.</div>`
+               : `<div class="sub">What changed on your list since the week before.</div>`;
+  h += `<div class="pf-kpi">${kpi("Setups on now", c.on ?? 0, "stocks")}${kpi("In an uptrend", c.uptrend ?? 0, "stocks")}${kpi(d.first ? "With a read" : "With changes", c.changed ?? stocks.length, "stocks")}</div>`;
+  if (c.alerts != null) h += `<div class="sub" style="margin-top:6px">Alerts that fired this week: ${esc(c.alerts)}</div>`;
+  h += stocks.length ? `<div class="pf-sub">${d.first ? "Where each stock stands" : "What changed"}</div>` +
+    stocks.map(s => `<div class="dg-s"><div class="dg-h"><b>${esc(s.name || s.symbol)}</b><span class="sub">${esc(shortSym(s.symbol || ""))}</span>${s.chg == null ? "" : `<span class="${s.chg >= 0 ? "up" : "down"}">${signed(s.chg, 1, true)} this week</span>`}</div>${(s.lines || []).map(x => `<div class="dg-l">${esc(x)}</div>`).join("")}</div>`).join("")
+    : `<div class="empty">Nothing changed on your list this week.</div>`;
+  if (quiet.length) h += `<div class="pf-sub">${d.first ? "No chart read yet" : "No change"}</div><div class="sub" style="font-size:13px;line-height:1.5">${quiet.map(esc).join(", ")}</div>`;
+  if (upcoming.length) h += `<div class="pf-sub">Coming up (next 7 days)</div>` +
+    upcoming.map(u => `<div class="dg-l">${esc(anDay(u.date))}: ${esc(u.what)}, ${esc(u.name || u.symbol)}</div>`).join("");
+  h += `<div class="sub" style="margin-top:10px">Made once a week from the chart reads and scorecards already on this page. Data, not advice.</div>`;
+  box.innerHTML = h;
+}
 async function loadMarket() {
   const { data, error } = await sb.from("tb_market").select("*");
   if (!error) (data || []).forEach(r => mkData[r.market] = r);
@@ -3688,7 +3742,7 @@ const tabKey = "tb_tab";
 // Section tabs: one group of cards at a time instead of one long scroll.
 const SECTIONS = {
   us: [["Overview", ["pnl", "perf", "uschart"]], ["Trades", ["positions", "signals", "trades"]], ["Watchlist", ["watchlist"]], ["Controls", ["controls"]]],
-  sg: [["Prices", ["prices"]], ["Market", ["market"]], ["Screener", ["screen", "sgxcmp"]], ["Research", ["sgx"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Journal", ["journal"]], ["Holdings", ["portfolio", "holdings"]], ["Alerts", ["alerts"]]],
+  sg: [["Prices", ["prices"]], ["Market", ["digest", "market"]], ["Screener", ["screen", "sgxcmp"]], ["Research", ["sgx"]], ["Order", ["tigerord"]], ["Baskets", ["basket"]], ["Journal", ["journal"]], ["Holdings", ["portfolio", "holdings"]], ["Alerts", ["alerts"]]],
 };
 const secKey = (t) => "tb_sec_" + t;
 const curSec = (t) => { const d = SECTIONS[t][0][0]; try { const v = localStorage.getItem(secKey(t)); return SECTIONS[t].some(x => x[0] === v) ? v : d; } catch (_) { return d; } };
@@ -3722,7 +3776,7 @@ setMkt(mkt);
 setTab((() => { try { return localStorage.getItem(tabKey); } catch (_) { return null; } })() === "sg" ? "sg" : "us");
 
 wireCollapse();
-const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); loadMarket(); loadHoldings(); loadBoard(); jrTick(); alTick(); pvTick(); };
+const refreshAll = () => { load(); loadExecMode(); loadRiskMode(); loadSgx(); loadOrders(); loadUsChart(); loadMarket(); loadDigest(); loadHoldings(); loadBoard(); jrTick(); alTick(); pvTick(); };
 refreshAll(); setInterval(refreshAll, 15000);
 
 // ---- self-update ----------------------------------------------------------
