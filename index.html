@@ -1246,18 +1246,21 @@ const szSt = {};   // symbol -> typed values (kept while the detail is rebuilt b
 const szDown = (p) => { const t = bkTick(p); return Math.round(Math.floor(p / t + 1e-9) * t * 1000) / 1000; };
 const szPx = (v) => v == null || !isFinite(v) ? "" : String(Math.round(v * 1000) / 1000);
 const szRiskKey = (cur) => "tb_sz_risk_" + cur;
+const szRiskMem = {};   // currency -> the amount typed this visit (works when storage is blocked)
 // suggested stop and target from the chart read, in the order the brief gives
 function szSuggest(t, px) {
   if (!t || !(px > 0)) return { stop: null, target: null, note: "No chart read yet, so no suggested stop: type your own." };
   const atr = t.atr > 0 ? t.atr : null, { sup, res } = anLevels(t, px);
   const pat = (t.patterns || []).find(p => (p.status === "forming" || p.status === "confirmed") && p.bias === "+");
-  const out = { stop: null, target: null, note: "" };
+  const out = { stop: null, target: null, note: "", tnote: "" };
   if (pat && pat.invalid > 0 && pat.invalid < px) { out.stop = szDown(pat.invalid); out.note = `Suggested stop: the price that breaks the ${pat.name}.`; }
   else if (sup[0]) { const s = sup[0].price - (atr ? atr / 2 : 0); if (s > 0 && s < px) { out.stop = szDown(s); out.note = `Suggested stop: just under the nearest support, ${anPx(sup[0].price)}.`; } }
-  if (out.stop == null && atr && px - 2 * atr > 0) { out.stop = szDown(px - 2 * atr); out.note = "Suggested stop: two normal daily swings below the price: there is no support below in the past year."; }
+  if (out.stop == null && atr && px - 2 * atr > 0) { out.stop = szDown(px - 2 * atr); out.note = sup[0] ? "Suggested stop: two normal daily swings below the price." : "Suggested stop: two normal daily swings below the price: there is no support below in the past year."; }
   if (out.stop == null) out.note = "No suggested stop: type your own.";
-  if (pat && pat.target > px) out.target = szDown(pat.target);
-  else if (res[0]) out.target = szDown(res[0].price);
+  // a pattern's textbook target only counts once the pattern has confirmed; while it is forming, use the nearest resistance
+  const conf = (t.patterns || []).find(p => p.status === "confirmed" && p.bias === "+" && p.target > px);
+  if (conf) { out.target = szDown(conf.target); out.tnote = `Suggested target: the ${conf.name}'s textbook target.`; }
+  else if (res[0]) { out.target = szDown(res[0].price); out.tnote = `Suggested target: the nearest resistance, ${anPx(res[0].price)}.`; }
   return out;
 }
 function szRender() {
@@ -1265,7 +1268,9 @@ function szRender() {
   if (!row) { box.innerHTML = ""; return; }
   const d = row.data, a = sgxAn[sgxSel], sug = szSuggest(a && a.tech, d.price), cur = d.currency === "USD" ? "US$" : "S$";
   const s = szSt[sgxSel] || (szSt[sgxSel] = {});
-  if (s.risk == null) { try { s.risk = localStorage.getItem(szRiskKey(cur)) || ""; } catch (_) { s.risk = ""; } }
+  // the amount is remembered per currency, so every stock of that currency shows the latest one
+  if (szRiskMem[cur] != null) s.risk = szRiskMem[cur];
+  else { try { s.risk = localStorage.getItem(szRiskKey(cur)) || ""; } catch (_) { s.risk = s.risk || ""; } }
   const val = (k, dflt) => s[k] != null ? s[k] : szPx(dflt);
   box.innerHTML = `<div class="entry"><div class="entry-h"><b>Size a trade</b><span class="sub">for a buy</span></div>
     <div class="sub">How many shares fit the amount you are willing to lose, if the price falls to your stop.</div>
@@ -1274,6 +1279,7 @@ function szRender() {
       <div><label for="sz-stop">Stop price</label><input type="number" id="sz-stop" min="0" step="any" inputmode="decimal" value="${esc(val("stop", sug.stop))}"></div></div>
     <div class="ord-f"><div><label for="sz-target">Target price</label><input type="number" id="sz-target" min="0" step="any" inputmode="decimal" value="${esc(val("target", sug.target))}"></div><div></div></div>
     <div class="sub" id="sz-note" style="margin-top:6px">${esc(sug.note)}</div>
+    ${sug.tnote ? `<div class="sub" id="sz-tnote" style="margin-top:2px">${esc(sug.tnote)}</div>` : ""}
     <div id="sz-out" style="margin-top:8px"></div>
     <button class="ghost" id="sz-use" style="width:100%;margin-top:8px" onclick="szUse()">Use in the Order form</button>
     <button class="ghost" style="width:100%;margin-top:8px" onclick="szJournal()">Save to journal</button>
@@ -1284,7 +1290,7 @@ function szRender() {
 function szInput(k) {
   const s = szSt[sgxSel]; if (!s) return;
   const el = $("sz-" + k); s[k] = el.value;
-  if (k === "risk") { const d = sgxCache.res[sgxSel]?.data; try { localStorage.setItem(szRiskKey(d && d.currency === "USD" ? "US$" : "S$"), el.value); } catch (_) {} }
+  if (k === "risk") { const d = sgxCache.res[sgxSel]?.data, cur = d && d.currency === "USD" ? "US$" : "S$"; szRiskMem[cur] = el.value; try { localStorage.setItem(szRiskKey(cur), el.value); } catch (_) {} }
   szOut();
 }
 // the numbers behind the block; null when the stock has no data yet
