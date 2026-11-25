@@ -3184,7 +3184,7 @@ function jrStats(rows) {
 function jrWorked(S) {
   if (!S) return `<div class="sec" style="margin-top:16px">What worked</div><div class="empty">No closed trades yet. This fills in as you close trades.</div>`;
   const st = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v small">${v}</div></div>`;
-  const pc = (v) => v == null ? "—" : fmt(v * 100, 0) + "%", rr = (v) => v == null ? "—" : jrSignedR(v), ap = (v) => v == null ? "—" : signed(v, 1, true);
+  const pc = (v) => v == null ? "n/a" : fmt(v * 100, 0) + "%", rr = (v) => v == null ? "n/a" : jrSignedR(v), ap = (v) => v == null ? "n/a" : signed(v, 1, true);
   const row = (lab, g) => `<tr><td class="lab">${esc(lab)}</td><td class="r">${g.n}</td><td class="r">${pc(g.win)}</td><td class="r">${rr(g.R)}</td></tr>`;
   const head = (a) => `<tr><th>${a}</th><th class="r">Trades</th><th class="r">Won</th><th class="r">Avg R</th></tr>`;
   return `<div class="sec" style="margin-top:16px">What worked</div>
