@@ -76,6 +76,10 @@
     table.lv tr.now td { color: var(--accent); font-weight: 700; border-top: 1px solid var(--accent); border-bottom: 1px solid var(--accent); }
     .sc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .sc span { background: var(--panel2); border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+    table.pn { table-layout: fixed; margin-top: 10px; }
+    table.pn th { text-align: left; }
+    table.pn td { vertical-align: top; width: 50%; font-size: 12.5px; line-height: 1.35; overflow-wrap: anywhere; }
+    table.pn td div { padding: 4px 0; } table.pn td b { display: block; }
     body[data-tab="sg"] #subline { display: none; }   /* Alpaca bot status: noise on the Tiger tab */
     .cmp-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
     .cmp-row:last-child { border-bottom: 0; }
@@ -1163,10 +1167,17 @@ function anEntry(a, d) {
 function anFa(f) {
   if (!f || !f.groups.length) return `<div class="empty">No company figures on file for this stock yet.</div>`;
   const short = (n) => n.split(":")[0];
+  // the summary: every line that reads well on the left, every line that reads poorly on the right
+  const all = f.groups.flatMap(g => g.rows), pos = all.filter(r => r.flag === "+"), neg = all.filter(r => r.flag === "-");
+  const pnCell = (rows) => rows.map(r => `<div>${esc(r.label)}<b>${esc(r.value)}</b></div>`).join("") || `<div class="sub">None</div>`;
+  const pn = pos.length || neg.length ? `<table class="vt pn"><tr><th class="up">Positives (${pos.length})</th><th class="down">Negatives (${neg.length})</th></tr>
+      <tr><td>${pnCell(pos)}</td><td>${pnCell(neg)}</td></tr></table>
+      <div class="sub" style="margin-top:6px">Lines that read in between are left out here. The full list with every figure is below.</div>` : "";
   return `<div class="pf-head" style="margin-top:8px"><div class="sec">Fundamentals scorecard</div>${anX()}</div>
     <div class="sc">${f.groups.filter(g => g.good || g.weak).map(g => `<span>${esc(short(g.name))} ${g.good ? `<b class="up">${g.good}✓</b>` : ""} ${g.weak ? `<b class="down">${g.weak}✗</b>` : ""}</span>`).join("")}</div>
     <div style="margin-top:8px">${anDots}</div>
     ${(f.notes || []).map(n => `<div class="warnnote" style="margin-top:8px">${esc(n)}</div>`).join("")}
+    ${pn}
     ${f.groups.map(g => `<div class="pf-sub">${esc(g.name)}</div>` + g.rows.map(r => anRow(r)).join("")).join("")}
     ${f.years && f.years.length ? `<div class="pf-sub">The last ${f.years.length} years</div>
       <table class="vt"><tr><th>Year</th><th class="r">Sales</th><th class="r">Profit</th><th class="r">Margin</th><th class="r">Free cash</th></tr>
