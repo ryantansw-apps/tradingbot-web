@@ -1474,6 +1474,7 @@ let scrF = scrPref("f", "all", SCR_F), scrS = scrPref("s", "setups", SCR_S), scr
 function scrSet(k, v) { if (k === "f") scrF = v; else scrS = v; try { localStorage.setItem(scrKey(k), v); } catch (_) {} renderScreen(); }
 const scrName = (n) => String(n || "").replace(/,?\s+(Limited|Ltd\.?|Inc\.?|Incorporated|Corporation|Corp\.?|plc|PLC)$/i, "").trim();
 const scrDay = (iso) => iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+const scrP = (x) => x == null || x === "" ? null : scrN(Number(x));   // null or missing stays null, never 0
 const scrN = (x) => typeof x === "number" && isFinite(x) ? x : null;
 function scrBuild() {
   const mine = sgxCache.wl.filter(r => r.enabled).map(r => r.symbol), uni = Object.fromEntries(pbRows.map(u => [u.symbol, u]));
@@ -1482,13 +1483,13 @@ function scrBuild() {
     if (!inMkt({ symbol: sym })) continue;
     const r = sgxCache.res[sym], u = uni[sym], full = !!(r && r.summary);
     const s = full ? r.summary : (u && u.scan) || {}, d = (r && r.data) || {};
-    rows.push({ sym, res: true, full, s, name: scrName(d.name || r?.name || u?.name || sym), px: scrN(s.price) ?? scrN(Number(d.price)) ?? scrN(Number(u?.price)),
+    rows.push({ sym, res: true, full, s, name: scrName(d.name || r?.name || u?.name || sym), px: scrP(s.price) ?? scrP(d.price) ?? scrP(u?.price),
       cur: (s.currency || d.currency || u?.currency) === "USD" ? "US$" : "S$" });
   }
   const have = new Set(mine);
   for (const u of pbRows) {
     if (u.market !== mkt || !u.in_pool || have.has(u.symbol)) continue;
-    rows.push({ sym: u.symbol, res: false, full: false, s: u.scan || {}, name: scrName(u.name || u.symbol), px: scrN(Number(u.price)), cur: u.currency === "USD" ? "US$" : "S$" });
+    rows.push({ sym: u.symbol, res: false, full: false, s: u.scan || {}, name: scrName(u.name || u.symbol), px: scrP(u.price), cur: u.currency === "USD" ? "US$" : "S$" });
   }
   return rows;
 }
@@ -1505,7 +1506,7 @@ const SCR_PASS = {
 // each sort gives numbers to rank by, biggest first; null = no data, goes last
 const scrBT = (s) => (s.bull || 0) - (s.bear || 0);
 const SCR_KEY = {
-  setups: (it) => [scrArr(it.s.on).length, scrArr(it.s.near).length, scrBT(it.s)],
+  setups: (it) => !it.s.trend ? null : [scrArr(it.s.on).length, scrArr(it.s.near).length, scrBT(it.s)],
   fund: (it) => it.full && it.s.kind ? [(it.s.fa_good || 0) - (it.s.fa_weak || 0)] : null,
   trend: (it) => it.s.trend ? [scrBT(it.s)] : null,
   sup: (it) => scrN(it.s.sup) != null && it.px > 0 ? [-(it.px - it.s.sup) / it.px] : null,
@@ -1537,7 +1538,7 @@ function scrRow(it) {
   const more = open && !it.res ? `<div class="more">Support ${lv(s.sup)} · Resistance ${lv(s.res)} · RSI ${scrN(s.rsi) == null ? "n/a" : fmt(s.rsi, 0)}${s.as_of ? " · chart as of " + esc(scrDay(s.as_of)) : ""}
       <div style="margin-top:6px"><button onclick="event.stopPropagation(); addSgxSym('${esc(it.sym)}')">Add to Research</button></div></div>` : "";
   return `<div class="scr-row" onclick="scrTap('${esc(it.sym)}')">
-    <div class="l1"><span class="nm">${esc(it.name)} <span class="sub">${esc(shortSym(it.sym))}</span></span><span class="px">${it.px == null ? "—" : it.cur + fmt(it.px, dp)}</span></div>
+    <div class="l1"><span class="nm">${esc(it.name)} <span class="sub">${esc(shortSym(it.sym))}</span></span><span class="px">${it.px == null ? "n/a" : it.cur + fmt(it.px, dp)}</span></div>
     <div class="l2">${l2}</div><div class="l3">${l3}</div>${more}</div>`;
 }
 function scrTap(sym) {
