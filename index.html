@@ -1157,6 +1157,7 @@ function anEntry(a, d) {
     const pat = (t.patterns || []).find(p => p.status !== "now");
     h += `<div>Trend: <b class="${t.trend === "Uptrend" ? "up" : t.trend === "Downtrend" ? "down" : ""}">${esc(t.trend)}</b> · ${t.bull} bullish and ${t.bear} bearish signals</div>
       <div>Support ${sup[0] ? `<b>${anPx(sup[0].price)}</b> (${to(sup[0].price)})` : "none below in the past year"} · resistance ${res[0] ? `<b>${anPx(res[0].price)}</b> (${to(res[0].price)})` : "none above in the past year"}</div>
+      ${t.weekly ? `<div>Weekly trend: <b class="${t.weekly.trend === "Uptrend" ? "up" : t.weekly.trend === "Downtrend" ? "down" : ""}">${esc(t.weekly.trend)}</b></div>${t.agree ? `<div class="sub">${esc(t.agree)}</div>` : ""}` : ""}
       ${pat ? `<div>Pattern: <b>${esc(pat.name)}</b> ${esc(pat.status)}${pat.status === "forming" ? `, confirms ${pat.bias === "+" ? "above" : "below"} ${anPx(pat.trigger)}` : ""}</div>` : ""}
       <div>Entry setups on now: ${on.length ? on.map(x => `<b class="up">${esc(x.name)}</b>`).join(", ") : "<b>none</b>"}${near.length ? ` · close: ${near.map(x => esc(x.name)).join(", ")}` : ""}</div>
       ${t.cautions.length ? `<div class="warn">⚠ ${t.cautions.length} reason${t.cautions.length > 1 ? "s" : ""} to wait, listed under Technicals</div>` : ""}`;
@@ -1185,6 +1186,15 @@ function anFa(f) {
       <div class="sub" style="margin-top:6px">Steady growth in sales, profit and free cash across the years says more than any single ratio.</div>` : ""}
     <div class="sub" style="margin-top:10px">The marks use common rules of thumb, or the gap to sector peers where there are peers. What is normal differs by industry, so use them to compare companies, not as buy or sell calls. Company figures from Yahoo Finance; yearly accounts refresh once a day.</div>`;
 }
+// Technicals: the weekly chart block, and the table under "Strength vs the index"
+const anWeekly = (t) => !("weekly" in t) ? "" : !t.weekly
+  ? `<div class="pf-sub">Weekly chart</div><div class="sub">The weekly read needs about 45 weeks of price history, which this stock does not have yet.</div>`
+  : `<div class="pf-sub">Weekly chart${tag("p")}</div>
+    <div>Weekly trend: <b class="${t.weekly.trend === "Uptrend" ? "up" : t.weekly.trend === "Downtrend" ? "down" : ""}">${esc(t.weekly.trend)}</b></div>
+    ${t.agree ? `<div class="sub" style="margin-top:4px">${esc(t.agree)}</div>` : ""}
+    ${t.weekly.rows.map(r => anRow(r)).join("")}`;
+const anRsTable = (rs) => !rs || !(rs.rows || []).length ? "" : `<table class="vt"><tr><th>Period</th><th class="r">Stock</th><th class="r">${esc(rs.label)}</th><th class="r">Gap</th></tr>
+  ${rs.rows.map(x => `<tr><td class="lab">${esc(x.period)}</td><td class="r">${signed(x.stock * 100, 1, true)}</td><td class="r">${signed(x.index * 100, 1, true)}</td><td class="r"><b class="${x.gap > 0 ? "up" : x.gap < 0 ? "down" : ""}">${signed(x.gap * 100, 1, true)}</b></td></tr>`).join("")}</table>`;
 function anTa(t, d, ser) {
   if (!t) return `<div class="empty">No chart read yet: it needs 60 trading days of price history. A newly listed stock fills in over the coming weeks.</div>`;
   const px = d.price, { sup, res } = anLevels(t, px), pc = (v) => signed((v / px - 1) * 100, 1, true);
@@ -1201,6 +1211,7 @@ function anTa(t, d, ser) {
       <div><span class="l">Bearish signals</span><b class="down">${t.bear}</b></div>
     </div>
     <div class="sub" style="margin-top:6px">${esc(t.trend)}: ${esc(t.trend_text)}.</div>
+    ${anWeekly(t)}
     <div class="pf-sub">Entry setups: is one there now?</div>
     ${t.setups.map(setup).join("")}
     ${t.cautions.length ? `<div class="pf-sub">Reasons to wait</div>${t.cautions.map(c => `<div class="fac"><span class="sg m">!</span><span>${esc(c)}</span></div>`).join("")}` : ""}
@@ -1215,7 +1226,7 @@ function anTa(t, d, ser) {
     <div class="pf-sub">Chart patterns${tag("w")}</div>
     ${(t.patterns || []).length ? t.patterns.map(pat).join("") : `<div class="empty">No classic pattern on the chart right now (double top or bottom, head and shoulders, triangle, range).</div>`}
     ${ser ? `<div class="sub" style="margin-top:10px">Each indicator below has its own chart under it, covering the same period as the price chart at the top (change it there: 3M, 6M, 1Y, 2Y).</div>` : ""}
-    ${t.groups.map(g => `<div class="pf-sub">${esc(g.name)}</div>` + g.rows.map(r => anRow(r, ser && IND[r.chart] ? `<div class="indbox" id="ind-${r.chart}"></div><div class="sub chart-leg">${IND[r.chart].leg}</div>` : "")).join("")).join("")}
+    ${t.groups.map(g => `<div class="pf-sub">${esc(g.name)}</div>` + g.rows.map(r => anRow(r, (ser && IND[r.chart] && ser[r.chart] ? `<div class="indbox" id="ind-${r.chart}"></div><div class="sub chart-leg">${IND[r.chart].leg}</div>` : "") + (r.chart === "rs" ? anRsTable(t.rs) : ""))).join("")).join("")}
     ${t.fib ? `<div class="pf-sub">Fibonacci levels${tag("w")}</div><div class="setup">${t.fib.levels.map(x => `${Math.round(x.r * 100)}%: <b>${anPx(x.price)}</b>`).join(" · ")}<span class="sub">${esc(t.fib.text)}</span></div>` : ""}
     ${(t.candles || []).length ? `<div class="pf-sub">Candles and gaps${tag("w")}</div>${t.candles.map(c => `<div class="setup"><b>${esc(c.name)}</b><span class="fl ${c.bias === "+" ? "p" : c.bias === "-" ? "m" : "e"}" style="margin-left:8px"></span><span class="sub">${esc(c.text)}</span></div>`).join("")}` : ""}
     <div class="sub" style="margin-top:10px"><i class="fl p"></i>bullish &nbsp; <i class="fl m"></i>bearish &nbsp; <i class="fl e"></i>neutral. Tags: <span class="tg tg-p">Predictive</span> trend and momentum, the best-supported signals · <span class="tg tg-m">Mixed evidence</span> works some of the time · <span class="tg tg-x">Weak evidence</span> widely watched, rarely reliable alone. Read from finished daily candles (Yahoo), refreshed hourly; distances use the latest price. These describe the chart, they are not advice. Signals that agree with each other, and with the fundamentals, count for more than any one line.</div>`;
@@ -1243,6 +1254,7 @@ const IND = {
   vol: { hist: "v", lines: [["v20", IC.b, 2]], fmt: "vol",
     leg: "bars = shares traded each day, green on an up day, red on a down day" + icl(IC.b, "20-day average") },
   obv: { lines: [["obv", IC.a, 2]], fmt: "vol", leg: icl(IC.a, "running total: up-day volume added, down-day volume taken off") },
+  rs: { lines: [["rs", IC.a, 2]], fmt: 1, leg: icl(IC.a, "stock price divided by the index, 100 = start of the data. Rising = beating the index") },
 };
 function drawInd() {
   Object.keys(charts).filter(id => id.startsWith("ind-")).forEach(id => { try { charts[id].remove(); } catch (_) {} delete charts[id]; });
