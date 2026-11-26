@@ -1344,10 +1344,11 @@ function sgxDetail(d) {
     <div class="sub" style="margin-top:4px">Headlines naming ${esc(sgxLabel(d))} in the last 30 days, newest first. Tap one to read it on the news site.</div>
     ${annLink}
     <button class="ghost" style="width:100%;margin-top:10px" onclick="setSec('Order','sg')">Trade ${esc(shortSym(d.symbol))} ›</button>
-    <div class="itabs" id="sgx-itabs">${SGX_ISECS.map(([k, n]) => `<button data-ik="${k}" onclick="setISec('${k}')">${n}</button>`).join("")}</div>
+    <div class="itabs" id="sgx-itabs">${SGX_ISECS.filter(([k]) => k !== "opt" || !d.symbol.endsWith(".SI")).map(([k, n]) => `<button data-ik="${k}" onclick="setISec('${k}')">${n}</button>`).join("")}</div>
     <div data-isec="overview"><div id="sgx-entry"><div class="empty">Loading the entry check…</div></div><div id="sz-box"></div><div id="sgx-alerts"></div><div class="sec">What's moving it</div>${fac}<div class="sec">Profitability and price</div>${prof}</div>
     <div data-isec="fa"><div id="sgx-fa"><div class="empty">Loading fundamentals…</div></div><div class="sec">Valuation vs peers and market</div>${vt}${peersT ? `<div class="sec">Peers</div>${peersT}` : ""}</div>
     <div data-isec="ta"><div id="sgx-ta"><div class="empty">Reading the chart…</div></div></div>
+    ${d.symbol.endsWith(".SI") ? "" : `<div data-isec="opt">${optBlock(d)}</div>`}
     <div data-isec="ratios"><div id="sgx-ratios"><div class="empty">Working out the ratios…</div></div></div>
     <div data-isec="earn"><div class="sec">Analyst expectations</div>${an}<div class="sec">Earnings</div>${earn}</div>
     <div class="sub" style="margin-top:10px">Source: Yahoo Finance, delayed. News: Google News and Yahoo, checked every hour on weekdays. Prices in ${d.currency === "USD" ? "USD" : "SGD"}.</div>`;
@@ -1686,8 +1687,126 @@ function chartMarks() {
   if (leg && !leg.querySelector(".lv-leg")) leg.insertAdjacentHTML("beforeend", `<span class="lv-leg"><br><i style="background:${up}"></i>support<i style="background:${dn}"></i>resistance${marks.length ? ` · <span style="color:#4da3ff">▲▼</span> pattern points, blue line = the price that confirms it` : ""}</span>`);
 }
 
+// Options tab (US stocks): the daily options reading from data.opt, in plain English
+function optBlock(d) {
+  const o = d.opt,
+    T = `<div class="sec">What the options market shows</div>`;
+  if (!o)
+    return (
+      T +
+      `<div class="empty">Options readings arrive once a day after the US close.</div>`
+    );
+  if (o.none)
+    return (
+      T + `<div class="empty">No listed options found for this stock.</div>`
+    );
+  const NA = `<span class="sub">not available</span>`,
+    has = (x) => x != null && isFinite(Number(x));
+  const cnt = (x) =>
+    has(x) ? Math.round(Number(x)).toLocaleString() : "not available";
+  const p0 = (x) => (has(x) ? (Number(x) * 100).toFixed(0) + "%" : null);
+  const usd = (x) => (has(x) ? "US$" + fmt(x, 2) : null);
+  const dday = (s) => {
+    const t = Date.parse(s + "T00:00:00Z");
+    return isNaN(t)
+      ? null
+      : new Date(t).toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          timeZone: "UTC",
+        });
+  };
+  const row = (label, val) =>
+    `<div class="pf-m an"><div class="t"><span>${esc(label)}</span><b>${val == null ? NA : esc(val)}</b></div></div>`;
+  const say = (t) =>
+    `<div class="sub" style="margin:2px 0 6px">${esc(t)}</div>`;
+  const asof = dday(o.as_of),
+    at = d.opt_at ? new Date(d.opt_at) : null;
+  const when =
+    at && !isNaN(at)
+      ? at.toLocaleTimeString("en-SG", {
+          hour: "numeric",
+          minute: "2-digit",
+          timeZone: "Asia/Singapore",
+        })
+      : null;
+  const head = asof
+    ? `From trading on ${asof}${when ? ", read " + when + " Singapore time" : ""}.`
+    : "";
+  const hist = Array.isArray(d.opt_hist) ? d.opt_hist : [];
+  const histLine = (key, today, label) => {
+    const vals = hist
+        .map((h) => h && h[key])
+        .filter(has)
+        .map(Number),
+      n = vals.length;
+    if (n >= 20 && has(today))
+      return `${label} higher than ${Math.round((100 * vals.filter((v) => v < Number(today)).length) / n)}% of the last ${n} readings.`;
+    return `Comparison with its own history appears after 20 trading days (${n} so far).`;
+  };
+  const PCR = {
+    calls:
+      "Far more calls than puts traded: traders lean to bets on a rise, or holders are selling calls for income.",
+    normal: "A normal mix of puts and calls.",
+    puts: "More puts than calls traded: more hedging or bets on a fall.",
+  };
+  const IV = {
+    rich: "Options cost more than recent swings justify: better for sellers, such as covered calls, than for buyers.",
+    cheap:
+      "Options cost less than recent swings justify: better for buyers than for sellers.",
+    normal: "Options are priced about in line with recent swings.",
+  };
+  const SK = {
+    steep:
+      "Protection against a drop costs much more than upside bets: holders are worried.",
+    upside:
+      "Upside bets cost more than protection: unusual, often seen with takeover talk or hype.",
+    normal: "Normal: protection usually costs a little more than upside bets.",
+  };
+  let mv = `<div class="sub">not available</div>`;
+  if (has(o.move_pct)) {
+    const dol = has(d.price)
+      ? " (" + usd(Number(o.move_pct) * Number(d.price)) + ")"
+      : "";
+    const rng =
+      has(o.move_lo) && has(o.move_hi)
+        ? ` Roughly a 2 in 3 chance the price stays between ${usd(o.move_lo)} and ${usd(o.move_hi)}.`
+        : "";
+    mv = `<div class="sub" style="color:var(--text)">${esc(`Options price in a move of about ±${(Number(o.move_pct) * 100).toFixed(1)}%${dol} by ${dday(o.exp) || "the next expiry"}${has(o.exp_days) ? " (" + Math.round(Number(o.exp_days)) + " days)" : ""}.${rng}`)}</div>`;
+  }
+  const busy = (Array.isArray(o.busiest) ? o.busiest : [])
+    .slice(0, 3)
+    .map(
+      (b) =>
+        `<div class="pf-m an"><div class="t"><span>${b.type === "put" ? "Put" : "Call"} ${has(b.strike) ? esc("US$" + fmt(b.strike, Number(b.strike) % 1 ? 2 : 0)) : "?"}, ${esc(dday(b.expiry) || "")}</span><b>${esc(cnt(b.volume))} traded</b></div><div class="sub">${esc(cnt(b.oi))} open${b.new ? ", mostly new" : ""}</div></div>`,
+    )
+    .join("");
+  return `${T}
+    ${head ? `<div class="sub">${esc(head)}</div>` : ""}
+    <div class="pf-sub">Put/call ratio</div>
+    ${row("Puts per call traded today", has(o.pcr_vol) ? fmt(o.pcr_vol, 2) : null)}
+    ${row("Puts per call, all open contracts", has(o.pcr_oi) ? fmt(o.pcr_oi, 2) : null)}
+    ${row("Calls traded", has(o.call_vol) ? cnt(o.call_vol) : null)}${row("Puts traded", has(o.put_vol) ? cnt(o.put_vol) : null)}
+    ${PCR[o.pcr_band] ? say(PCR[o.pcr_band]) : ""}
+    ${say("Every option trade has a buyer and a seller, so this counts activity, not direction. Many puts are insurance bought by people who own the shares.")}
+    <div class="sub">${esc(histLine("pcr", o.pcr_vol, "Put/call ratio"))}</div>
+    <div class="pf-sub">Expected move</div>
+    ${mv}
+    <div class="pf-sub">Option prices vs actual swings</div>
+    ${row("Swing the options imply (yearly)", p0(o.atm_iv))}${row("Actual swing, last 20 days (yearly)", p0(o.rv))}
+    ${IV[o.iv_band] ? say(IV[o.iv_band]) : ""}
+    <div class="sub">${esc(histLine("iv", o.atm_iv, "Option prices"))}</div>
+    <div class="pf-sub">Downside protection</div>
+    ${row("Extra cost of protection (points)", has(o.skew_pts) ? fmt(o.skew_pts, 1) : null)}
+    ${SK[o.skew_band] ? say(SK[o.skew_band]) : ""}
+    <div class="pf-sub">Busiest contracts</div>
+    ${busy || `<div class="sub">not available</div>`}
+    <div class="sub" style="margin-top:10px">Research only. These readings describe what option traders are doing. In studies the public versions of these numbers predicted little; use them to understand risk, not to time trades.</div>`;
+}
+
 // Research detail inner tabs
-const SGX_ISECS = [["overview", "Overview"], ["fa", "Fundamentals"], ["ta", "Technicals"], ["ratios", "Risk and returns"], ["earn", "Analysts and earnings"]];
+const SGX_ISECS = [["overview", "Overview"], ["fa", "Fundamentals"], ["ta", "Technicals"], ["opt", "Options"], ["ratios", "Risk and returns"], ["earn", "Analysts and earnings"]];
+const isecNow = () => sgxISec === "opt" && sgxSel && sgxSel.endsWith(".SI") ? "overview" : sgxISec;   // Options is US only
 // headline age in Singapore time: "today 9:20 AM", "yesterday", "3 days ago", "12 Nov"
 function newsWhen(n) {
   if (!n.at) return esc(n.date || "");
@@ -1708,8 +1827,8 @@ const iKey = "tb_isec";
 let sgxISec = (() => { try { let v = localStorage.getItem(iKey); if (v === "value") v = "fa"; return SGX_ISECS.some(x => x[0] === v) ? v : "overview"; } catch (_) { return "overview"; } })();
 function setISec(k) { sgxISec = k; try { localStorage.setItem(iKey, k); } catch (_) {} applyISec(); }
 function applyISec() {
-  document.querySelectorAll("#sgx-detail [data-isec]").forEach(el => el.classList.toggle("isec-off", el.dataset.isec !== sgxISec));
-  document.querySelectorAll("#sgx-itabs button").forEach(b => b.classList.toggle("on", b.dataset.ik === sgxISec));
+  document.querySelectorAll("#sgx-detail [data-isec]").forEach(el => el.classList.toggle("isec-off", el.dataset.isec !== isecNow()));
+  document.querySelectorAll("#sgx-itabs button").forEach(b => b.classList.toggle("on", b.dataset.ik === isecNow()));
 }
 function selSgx(sym) { sgxSel = sym; try { localStorage.setItem(sgxSelKey, sym); } catch (_) {} sgxCache.sig = ""; renderSgx(); ordStock(); }
 async function addSgx() {
