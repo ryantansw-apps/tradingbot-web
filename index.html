@@ -1694,7 +1694,7 @@ function optBlock(d) {
   if (!o)
     return (
       T +
-      `<div class="empty">Options readings arrive once a day after the US close.</div>`
+      `<div class="empty">Options readings arrive each weekday morning, Singapore time, after the US session.</div>`
     );
   if (o.none)
     return (
@@ -1733,7 +1733,7 @@ function optBlock(d) {
   const head = asof
     ? `From trading on ${asof}${when ? ", read " + when + " Singapore time" : ""}.`
     : "";
-  const hist = Array.isArray(d.opt_hist) ? d.opt_hist : [];
+  const hist = (Array.isArray(d.opt_hist) ? d.opt_hist : []).filter((h) => !(h && h.d === o.as_of)); // earlier readings only
   const histLine = (key, today, label) => {
     const vals = hist
         .map((h) => h && h[key])
