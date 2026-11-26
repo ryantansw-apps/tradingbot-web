@@ -1740,8 +1740,9 @@ function optBlock(d) {
         .filter(has)
         .map(Number),
       n = vals.length;
-    if (n >= 20 && has(today))
-      return `${label} higher than ${Math.round((100 * vals.filter((v) => v < Number(today)).length) / n)}% of the last ${n} readings.`;
+    if (n >= 20)
+      return has(today) ? `${label} higher than ${Math.round((100 * vals.filter((v) => v < Number(today)).length) / n)}% of the last ${n} readings.` : "";
+    if (key !== "pcr") return ""; // the "appears after 20 trading days" sentence is shown once, under Put/call ratio
     return `Comparison with its own history appears after 20 trading days (${n} so far).`;
   };
   const PCR = {
@@ -1784,18 +1785,18 @@ function optBlock(d) {
   return `${T}
     ${head ? `<div class="sub">${esc(head)}</div>` : ""}
     <div class="pf-sub">Put/call ratio</div>
-    ${row("Puts per call traded today", has(o.pcr_vol) ? fmt(o.pcr_vol, 2) : null)}
+    ${row("Puts per call traded", has(o.pcr_vol) ? fmt(o.pcr_vol, 2) : null)}
     ${row("Puts per call, all open contracts", has(o.pcr_oi) ? fmt(o.pcr_oi, 2) : null)}
     ${row("Calls traded", has(o.call_vol) ? cnt(o.call_vol) : null)}${row("Puts traded", has(o.put_vol) ? cnt(o.put_vol) : null)}
     ${PCR[o.pcr_band] ? say(PCR[o.pcr_band]) : ""}
     ${say("Every option trade has a buyer and a seller, so this counts activity, not direction. Many puts are insurance bought by people who own the shares.")}
-    <div class="sub">${esc(histLine("pcr", o.pcr_vol, "Put/call ratio"))}</div>
+    ${histLine("pcr", o.pcr_vol, "Put/call ratio") ? `<div class="sub">${esc(histLine("pcr", o.pcr_vol, "Put/call ratio"))}</div>` : ""}
     <div class="pf-sub">Expected move</div>
     ${mv}
     <div class="pf-sub">Option prices vs actual swings</div>
     ${row("Swing the options imply (yearly)", p0(o.atm_iv))}${row("Actual swing, last 20 days (yearly)", p0(o.rv))}
     ${IV[o.iv_band] ? say(IV[o.iv_band]) : ""}
-    <div class="sub">${esc(histLine("iv", o.atm_iv, "Option prices"))}</div>
+    ${histLine("iv", o.atm_iv, "Option prices") ? `<div class="sub">${esc(histLine("iv", o.atm_iv, "Option prices"))}</div>` : ""}
     <div class="pf-sub">Downside protection</div>
     ${row("Extra cost of protection (points)", has(o.skew_pts) ? fmt(o.skew_pts, 1) : null)}
     ${SK[o.skew_band] ? say(SK[o.skew_band]) : ""}
