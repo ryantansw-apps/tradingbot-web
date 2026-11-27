@@ -203,9 +203,16 @@
     .chartbox .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
     .chart-leg { font-size: 12px; margin-top: 4px; }
     .sgx-fs { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh; z-index: 40; background: var(--bg); overflow-y: auto; box-sizing: border-box; padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
-    #sgx-fs #sgx-chart-blk { display: flex; flex-direction: column; min-height: 100%; }
-    #sgx-fs #sgx-chart-blk > * { flex-shrink: 0; }
-    #sgx-fs #sgx-chart { flex: 1 0 220px; height: auto; }
+    .sgx-fs { overscroll-behavior: contain; }
+    #sgx-fs #sgx-chart-blk { display: flow-root; }
+    #sgx-fs #sgx-chart { min-height: 0; }
+    #sgx-chart-hd { min-height: 2.6em; }
+    @media (orientation: landscape) and (max-height: 500px) {
+      .sgx-fs { padding-top: calc(4px + env(safe-area-inset-top)); padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
+      #sgx-fs #sgx-chart-hd { min-height: 1.3em; }
+      #sgx-fs #sgx-chart-tf { margin-top: 0 !important; }
+      #sgx-fs #sgx-chart { margin-top: 4px; }
+    }
     .indbox { width: 100%; height: 130px; margin-top: 8px; }
     .chart-leg i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin: 0 4px 0 8px; }
     header h1 { font-size: 16px; font-weight: 700; letter-spacing: .3px; }
@@ -251,7 +258,7 @@
     .sig .h { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     .sig .t { font-size: 11.5px; color: var(--muted); }
     .sig pre { white-space: pre-wrap; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9d3de; margin-top: 6px; background: var(--panel2); padding: 8px 10px; border-radius: 8px; }
-    .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: #263140; color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: .25s; pointer-events: none; }
+    .toast { position: fixed; z-index: 60; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: #263140; color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: .25s; pointer-events: none; }
     .toast.show { opacity: 1; }
     .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
     .ctl { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
@@ -1237,8 +1244,8 @@ let sgxPending = false;   // a refresh arrived while a field in the detail had f
 const sgxTyping = () => { const a = document.activeElement; return !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.closest("#sgx-detail")); };
 document.addEventListener("focusout", () => { if (sgxPending) setTimeout(() => { if (sgxPending && !sgxTyping()) renderSgx(); }, 350); });
 function renderSgx(poll) {
-  taFsClose();   // the card is redrawn below: a chart in full screen goes back first
   if (fxOn) return renderFx();
+  taFsClose();   // the card is redrawn below: a chart in full screen goes back first
   const live = sgxCache.wl.filter(r => r.enabled && inMkt(r)), parked = sgxCache.wl.filter(r => !r.enabled && inMkt(r));
   $("sgx-chips").innerHTML = live.map(r => {
     const bad = r.status === "invalid", wait = !sgxCache.res[r.symbol];
@@ -1351,7 +1358,7 @@ function sgxDetail(d) {
     <div class="chips" id="sgx-chart-tf" style="margin-top:8px"></div>
     <div class="chips" id="sgx-chart-ov" style="margin-top:4px"></div>
     <div class="chips" id="sgx-chart-ind" style="margin-top:4px"></div>
-    <div class="sub chart-leg" id="sgx-chart-hd" style="min-height:1.3em;margin-top:6px"></div>
+    <div class="sub chart-leg" id="sgx-chart-hd" style="margin-top:6px"></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chartbox" id="sgx-chart-rsi" style="height:110px;display:none"></div>
     <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
@@ -3612,7 +3619,7 @@ async function drawChart(id, sym) {
     for (const x of ["-ta", "-read"]) { const b = $(id + x); if (b) b.innerHTML = ""; }   // nothing from an intraday view under the daily chart
   }
   let bars;
-  try { bars = await getBars(sym); } catch (_) { if (!stale()) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; if (id === "sgx-chart") { taIndClear(); delete chartC[id]; } } return; }
+  try { bars = await getBars(sym); } catch (_) { if (!stale()) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; if (id === "sgx-chart") { taIndClear(); taHdClear(); delete chartC[id]; } } return; }
   if (stale()) return;
   const live = sgxCache.res[sym]?.data;   // today's session so far, from the 5-minute price job
   if (bars.length && live && live.day && live.day_open && live.price) {
@@ -3622,7 +3629,7 @@ async function drawChart(id, sym) {
     else if (live.day === lastDay) bars = bars.slice(0, -1).concat([today]);
   }
   if ($(id) !== el) return;   // card re-rendered while loading
-  if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; if (id === "sgx-chart") { taIndClear(); delete chartC[id]; } return; }
+  if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; if (id === "sgx-chart") { taIndClear(); taHdClear(); delete chartC[id]; } return; }
   const n = (RANGES.find(r => r[0] === chartRng) || RANGES[1])[1];
   if (id === "sgx-chart") taViewSave(id);
   if (charts[id]) { try { charts[id].remove(); } catch (_) {} }
@@ -3637,7 +3644,9 @@ async function drawChart(id, sym) {
     crosshair: { mode: 0 }, ...(id === "sgx-chart" ? TA_NAV : { handleScroll: false, handleScale: false }),
   });
   charts[id] = ch; if (chartRO) chartRO.observe(el);
-  const c = ch.addCandlestickSeries({ upColor: up, downColor: dn, wickUpColor: up, wickDownColor: dn, borderVisible: false });
+  const rdDec = sym.endsWith(".SI") && bars[bars.length - 1][4] < 1 ? 3 : 2;   // same decimals on the axis and in the readout
+  const c = ch.addCandlestickSeries({ upColor: up, downColor: dn, wickUpColor: up, wickDownColor: dn, borderVisible: false,
+    ...(id === "sgx-chart" ? { priceFormat: { type: "price", precision: rdDec, minMove: Math.pow(10, -rdDec) } } : {}) });
   c.setData(bars.map(b => ({ time: b[0], open: b[1], high: b[2], low: b[3], close: b[4] })));
   c._sym = sym; c._first = bars[0][0]; chartC[id] = c;
   const vol = ch.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
@@ -3647,12 +3656,12 @@ async function drawChart(id, sym) {
   m50.setData(sma(bars, 50));
   const m200 = ch.addLineSeries({ color: "#ffb84d", lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
   m200.setData(sma(bars, 200));
-  const bt = bars.map(b => b[0]), dflt = { from: Math.max(0, bars.length - n), to: bars.length - 1 };
+  const bt = bars.map(b => b[0]), dflt = { from: Math.max(0, bars.length - n), to: bars.length - 1 + 5 };
   let rng = dflt;
   if (id === "sgx-chart") {
     rng = taViewRange(sym + "|1d|" + chartRng, bt, dflt);
     ch._vk = sym + "|1d|" + chartRng; ch._bt = bt; ch._dflt = dflt;
-    taReadout(ch, bars.map(b => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] })), { dec: sym.endsWith(".SI") ? 3 : 2, fx: false });
+    taReadout(ch, bars.map(b => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] })), { dec: rdDec, fx: false });
   }
   ch.timeScale().setVisibleLogicalRange(rng);
   const rngEl = $(id + "-rng");
@@ -3671,6 +3680,7 @@ async function drawChart(id, sym) {
       const taE = $(id + "-ta"); if (taE) taE.innerHTML = taIndLegend({ fx: false, tf: "1d" });
       taDaily(id, sym, c, bars, seq);
     }
+    taFsFit();
   }
 }
 function setChartRng(k) {
@@ -3805,6 +3815,7 @@ const TA_FMT = {
     minute: "2-digit",
   },
   hms: { hour: "2-digit", minute: "2-digit", second: "2-digit" },
+  rd: { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" },
   ymd: { year: "numeric", month: "2-digit", day: "2-digit" },
   wdm: { weekday: "short", day: "numeric", month: "short" },
 };
@@ -4235,9 +4246,63 @@ let taFs = false, // full screen open
   taFsPrev = null, // page scroll and overflow to give back
   taView = null; // the view of the chart that is being rebuilt
 // the main chart's height in normal view; in full screen the box fills what the controls leave
+const taLand = () => window.innerWidth > window.innerHeight;
+const taSubH = () => (taFs && taLand() ? 70 : 110);
+let taLayers = true; // full screen: the overlay, indicator and Draw rows are shown
 function taSizeMain() {
   const el = $("sgx-chart");
-  if (el && el.style) el.style.height = taFs ? "" : taMainH() + "px";
+  if (!taFs && el && el.style) el.style.height = taMainH() + "px";
+  taFsFit();
+}
+// Full screen: the main chart gets what is left of the visible viewport after every other row (measured), at least 160 px.
+// Out of full screen it only puts the rows and small charts back to normal.
+function taFsFit() {
+  const hide = taFs && !taLayers ? "none" : "";
+  ["sgx-chart-ov", "sgx-chart-ind", "sgx-chart-draw", "sgx-chart-draw-n"].forEach((id) => {
+    const e = $(id);
+    if (e && e.style) e.style.display = hide;
+  });
+  const box = $("sgx-fs"),
+    blk = $("sgx-chart-blk"),
+    el = $("sgx-chart"),
+    sh = taSubH(),
+    land = taFs && taLand();
+  TA_SUBS.forEach((id) => {
+    const e = $(id);
+    if (!e || !e.style || e.style.display === "none") return;
+    e.style.height = sh + "px";
+    e.style.marginTop = land ? "2px" : "";
+    if (charts[id])
+      try {
+        charts[id].applyOptions({ height: sh });
+      } catch (_) {}
+  });
+  if (!taFs) {
+    if (box && box.style) box.style.height = "";
+    return;
+  }
+  if (!box || !blk || !el) return;
+  const vv = window.visualViewport,
+    vh = Math.floor((vv && vv.height) || window.innerHeight);
+  box.style.height = vh + "px";
+  el.style.height = "0px";
+  const cs = getComputedStyle(box),
+    pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0),
+    h = Math.max(160, Math.floor(vh - pad - blk.offsetHeight));
+  el.style.height = h + "px";
+  if (charts["sgx-chart"])
+    try {
+      charts["sgx-chart"].applyOptions({ height: h });
+    } catch (_) {}
+}
+function taLayersToggle() {
+  taLayers = !taLayers;
+  const s = taSym();
+  if (s) taControls(s);
+}
+function taHdClear() {
+  const hd = $("sgx-chart-hd");
+  if (hd) hd.innerHTML = "";
 }
 // Before the old chart is removed: where was the reader looking? end = the right edge sat within 2 bars of the last bar.
 function taViewSave(id) {
@@ -4259,7 +4324,7 @@ function taViewRange(key, bt, dflt) {
   taView = null;
   if (!v || v.k !== key || !bt.length) return dflt;
   if (v.end) {
-    const to = bt.length - 1 + v.off;
+    const to = bt.length - 1 + Math.max(0, v.off);
     return { from: to - v.w, to };
   }
   const i = bt.indexOf(v.t);
@@ -4271,6 +4336,7 @@ function taLatest() {
   if (!ch || !ch._dflt) return;
   try {
     ch.timeScale().setVisibleLogicalRange(ch._dflt);
+    ch.priceScale("right").applyOptions({ autoScale: true });
   } catch (_) {}
 }
 function taFsRefresh() {
@@ -4293,6 +4359,7 @@ function taFsOpen() {
   document.body.style.overflow = "hidden";
   document.documentElement.style.overflow = "hidden";
   taFs = true;
+  taLayers = !taLand(); // wider than tall: the extra rows start folded away
   try {
     history.pushState({ taFs: 1 }, "");
     taFsPush = true;
@@ -4332,12 +4399,12 @@ function taFsClose(fromPop) {
 }
 const taFsToggle = () => (taFs ? taFsClose() : taFsOpen());
 const taNavChips = () =>
-  `<div class="chip" style="padding:4px 12px" onclick="taLatest()">Latest</div><div class="chip ${taFs ? "sel" : ""}" style="padding:4px 12px" onclick="taFsToggle()">${taFs ? "Close" : "Full screen"}</div>`;
+  `<div class="chip" style="padding:4px 12px" onclick="taLatest()">Latest</div>${taFs ? `<div class="chip ${taLayers ? "sel" : ""}" style="padding:4px 12px" onclick="taLayersToggle()">Layers</div>` : ""}<div class="chip ${taFs ? "sel" : ""}" style="padding:4px 12px" onclick="taFsToggle()">${taFs ? "Close" : "Full screen"}</div>`;
 // Candle readout above the chart. recs = [{time, o, h, l, c, v}] in chart order; prev = the previous close (or null).
 const taVolFmt = (v) =>
   v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : String(Math.round(v));
 function taCandleLine(r, prev, o) {
-  const when = typeof r.time === "number" ? taF("full").format(new Date(r.time * 1000)) + " " + taZone() : String(r.time),
+  const when = typeof r.time === "number" ? taF("rd").format(new Date(r.time * 1000)) + " " + taZone() : String(r.time),
     chg = prev ? (r.c / prev - 1) * 100 : null,
     vol = Number(r.v);
   return (
@@ -4383,6 +4450,7 @@ function taControls(sym) {
       const t = $("sgx-chart" + s);
       if (t) t.innerHTML = "";
     }
+    taFsFit();
     return;
   }
   tf.innerHTML = TA_TFS.map(
@@ -4404,6 +4472,7 @@ function taControls(sym) {
           : `<div class="chip ${taInd.includes(k) ? "sel" : ""}" data-k="${k}" style="padding:3px 9px;font-size:12px" onclick="toggleTaInd('${k}')">${k === "vwap" && taVwapShort ? TA_VWAP_SHORT : n}</div>`,
       ).join("");
   taDrawUi(sym);
+  taFsFit();
 }
 function setTaTf(k) {
   taTf = k;
@@ -4992,7 +5061,7 @@ function taIndDraw(ch, rows, o) {
     const date = typeof rows[0].time !== "number";
     const sc = LightweightCharts.createChart(el, {
       width: el.clientWidth || 340,
-      height: 110,
+      height: taSubH(),
       layout: {
         background: { color: "transparent" },
         textColor: o.txt,
@@ -5108,18 +5177,23 @@ function taIndDraw(ch, rows, o) {
     subs.forEach((sc) => {
       sc.timeScale().setVisibleLogicalRange(o.range);
       // main and small chart follow each other; the flag stops one move from echoing back forever
+      // a late echo of a range one chart sent is not sent back (a stale range would undo the drag)
       let busy = false;
-      const link = (a, b) =>
+      const sent = { m: [], s: [] },
+        near = (x, y) => Math.abs(x.from - y.from) < 0.01 && Math.abs(x.to - y.to) < 0.01;
+      const link = (a, b, me, other) =>
         a.timeScale().subscribeVisibleLogicalRangeChange((r) => {
-          if (busy || !r) return;
+          if (busy || !r || sent[other].some((x) => near(x, r))) return;
+          sent[me].push(r);
+          if (sent[me].length > 12) sent[me].shift();
           busy = true;
           try {
             b.timeScale().setVisibleLogicalRange(r);
           } catch (_) {}
           busy = false;
         });
-      link(ch, sc);
-      link(sc, ch);
+      link(ch, sc, "m", "s");
+      link(sc, ch, "s", "m");
     });
   } catch (_) {}
 }
@@ -5164,8 +5238,7 @@ async function drawIntraday(id, sym, seq) {
   taIndClear();
   delete chartC[id];
   if (!bars.length) {
-    const hd = $("sgx-chart-hd");
-    if (hd) hd.innerHTML = "";
+    taHdClear();
     taVwapShort = false;
     el.innerHTML = `<div class="empty">${esc(fx ? TA_EMPTY_FX : TA_EMPTY)}</div>`;
     if (legEl) legEl.innerHTML = "";
@@ -5265,7 +5338,7 @@ async function drawIntraday(id, sym, seq) {
   const bt = bars.map((x) => x.k),
     dflt = {
       from: Math.max(0, bars.length - (daily ? 130 : 80)),
-      to: bars.length - 1,
+      to: bars.length - 1 + 5,
     },
     rng = taViewRange(sym + "|" + tf, bt, dflt);
   ch._vk = sym + "|" + tf;
@@ -5282,6 +5355,7 @@ async function drawIntraday(id, sym, seq) {
     bars.map(({ k, b }) => ({ time: k, t: b[0], h: b[2], l: b[3], c: b[4], v: b[5] })),
     { fx, tf, daily: false, dec, range: rng, up, dn, txt, line },
   );
+  taFsFit();
   const last = bars[bars.length - 1].b;
   if (legEl)
     legEl.innerHTML = `${esc(taName(sym))} · ${esc(tf)} · last ${fmt(last[4], dec)} · ${daily ? (tf === "1w" ? "weekly bars" : "daily bars") : "times in " + (taTz === "Asia/Singapore" ? "Singapore time (SGT)" : "New York time (ET)")}`;
@@ -5306,7 +5380,7 @@ function renderFx() {
     <div class="chips" id="sgx-chart-tf" style="margin-top:8px"></div>
     <div class="chips" id="sgx-chart-ov" style="margin-top:4px"></div>
     <div class="chips" id="sgx-chart-ind" style="margin-top:4px"></div>
-    <div class="sub chart-leg" id="sgx-chart-hd" style="min-height:1.3em;margin-top:6px"></div>
+    <div class="sub chart-leg" id="sgx-chart-hd" style="margin-top:6px"></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chartbox" id="sgx-chart-rsi" style="height:110px;display:none"></div>
     <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
@@ -5377,6 +5451,8 @@ const chartRO = typeof ResizeObserver === "undefined" ? null : new ResizeObserve
     if (ch && w > 0) { ch.applyOptions({ width: w, height: Math.floor(e.contentRect.height) || 260 }); } }
 });
 window.addEventListener("resize", () => { taSizeMain(); for (const [id, ch] of Object.entries(charts)) { const el = $(id); if (el && el.clientWidth) ch.applyOptions({ width: el.clientWidth }); } });
+window.addEventListener("orientationchange", () => setTimeout(taSizeMain, 250));
+if (window.visualViewport) window.visualViewport.addEventListener("resize", taSizeMain);
 window.addEventListener("popstate", () => { if (taFs) taFsClose(true); });   // the browser Back button closes full screen
 
 // ---- Trade journal: a private log of the reader's own buys (table tb_journal, passcode for
