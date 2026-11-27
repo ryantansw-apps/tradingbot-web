@@ -214,6 +214,20 @@
       #sgx-fs #sgx-chart { margin-top: 4px; }
     }
     .indbox { width: 100%; height: 130px; margin-top: 8px; }
+    .ta-card { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; line-height: 1.5; }
+    .ta-card > div + div { margin-top: 6px; }
+    .ta-pill { display: inline-block; padding: 1px 9px; border-radius: 10px; font-weight: 700; font-size: 12px; background: rgba(138,151,166,.2); color: var(--muted); }
+    .ta-pill.up { background: rgba(35,196,122,.18); color: var(--up); }
+    .ta-pill.down { background: rgba(255,92,92,.18); color: var(--down); }
+    .ta-tfs { display: inline-flex; flex-wrap: wrap; gap: 2px 10px; margin-left: 6px; font-size: 12px; vertical-align: middle; }
+    .ta-tfs .up { color: var(--up); }
+    .ta-tfs .down { color: var(--down); }
+    .ta-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin-top: 4px; }
+    .ta-lnk { color: var(--accent); text-decoration: underline; cursor: pointer; }
+    .ta-ex { margin-top: 8px; font-size: 12px; }
+    .ta-ex summary { cursor: pointer; color: var(--accent); }
+    .ta-ex .ta-exi { margin-top: 8px; }
+    .ta-ex .ta-tst { color: var(--muted); margin-top: 2px; }
     .chart-leg i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin: 0 4px 0 8px; }
     header h1 { font-size: 16px; font-weight: 700; letter-spacing: .3px; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
@@ -440,7 +454,7 @@
     </div>
     <div class="chips" id="sgx-chips"></div>
     <div id="sgx-detail"></div>
-    <div class="sub" style="margin-top:12px">For your own manual trades through Tiger: the Alpaca bot never trades these. Data, not advice. Refreshes hourly on weekdays, 9:30am to 5:30pm and 9:30pm to 4:30am SG time (US market hours).</div>
+    <div class="sub" style="margin-top:12px">For your own Tiger trades. Data, not advice. Research data refreshes hourly in SG and US market hours.</div>
     </div>
   </div>
 
@@ -3729,17 +3743,59 @@ const TA_IND_TESTED = {
   rsi: "Tested 26 Nov (daily, 20 ETFs, 2007 to 2026): RSI 30/70 made 5.2% a year, worst fall -42.9%; failed the luck test.",
   macd: "Tested 26 Nov (daily, 20 ETFs, 2007 to 2026): 4.8% a year, worst fall -27.9%; failed the luck test.",
 };
-const TA_FEED =
-  "Real-time prices from one exchange (IEX). Highs, lows and volume can differ slightly from the full market. Updates about every minute while the laptop is on.";
-const TA_DAILY_NOTE =
-  "Overlays on the daily chart come from IEX daily bars, so a gap or zone can differ slightly from the candles shown.";
-const TA_FEED_FX = "Currency prices from Yahoo, delayed a few minutes.";
+const TA_FEED = "IEX real-time";
+const TA_DAILY_NOTE = "IEX daily bars";
+const TA_FEED_FX = "Yahoo, a few minutes delayed";
 const TA_EMPTY =
   "No intraday data yet: the laptop job fills this during US trading hours.";
 const TA_EMPTY_FX =
   "No currency data yet: the laptop job fills this on weekdays.";
-const TA_READ_H =
-  "Textbook TA read (not advice; tested no better than random entries)";
+// Plain-English explainer under the Research chart: [name, text, tested line or ""]. The tested lines are the labels above.
+const TA_EXPLAIN = [
+  ["Support and resistance (Levels)", 'A price where the market turned before. Support is below the price, where buyers stepped in; resistance is above, where sellers stepped in. Traders expect price to react there again. Lines marked "4h S" or "1D R" are the same levels from a bigger timeframe.', TA_TESTED.levels],
+  ["FVG (fair value gap)", "A gap left by a fast move: three candles where the first and the third do not overlap. Traders expect price to come back and fill it.", TA_TESTED.fvg],
+  ["Order block", "The last candle against the move before a strong push. Traders treat it as a zone where big buyers or sellers were active.", TA_TESTED.order_blocks],
+  ["CHoCH (change of character)", "The first break of the latest swing in the other direction. In a downtrend, a close above the last swing high is an up CHoCH; in an uptrend, a close below the last swing low is a down CHoCH. Read as an early sign the trend may be turning.", TA_TESTED.choch],
+  ["Flip", "A broken level being tested from the other side: old resistance acting as support, or old support acting as resistance.", TA_TESTED.flips],
+  ["Candle patterns", "Shapes of one to three candles, such as hammer, engulfing or doji, said to hint at the next move.", TA_TESTED.patterns],
+  ["Entries", "Where the two textbook entry rules would have traded: after a confirming candle at a level, or after price pokes through a level and snaps back (a sweep).", TA_TESTED.entries],
+  ["Trend", "Up when the last two swing highs and lows are both higher, down when both are lower, otherwise none.", ""],
+  ["Bias", "The direction the bigger timeframes agree on: up only if the 4-hour and daily trends are both up, down if both are down, otherwise mixed. The daily chart uses the daily trend alone and the weekly chart the weekly trend alone.", ""],
+  ["Plan (zone, trigger, stop, target)", "The zone is where a textbook trader would look to enter, close to a level. The trigger is the candle that must appear before entering. The stop is where the idea is wrong and you get out. The target is the next level, where you take profit.", ""],
+  ["Reward to risk", "How much you could make for each 1 you risk: the distance to the target divided by the distance to the stop. Under 1 means the trade risks more than it can make, so the plan says to skip it.", ""],
+  ["ATR", "Average true range, how far price usually moves in one candle on this timeframe. Zones and stops are sized with it.", ""],
+  ["Moving averages (MA 20, 50, 200)", "The average close of the last 20, 50 or 200 candles. Price above a rising average is read as an uptrend.", TA_IND_TESTED.ma],
+  ["EMA 9 and 21", "Moving averages that weight recent candles more, so they turn faster.", TA_IND_TESTED.ema],
+  ["Bollinger Bands", "A 20-candle average with bands two standard deviations above and below. Price at a band is read as stretched.", TA_IND_TESTED.bb],
+  ["VWAP", "The average price paid today from the 9:30 New York open, weighted by volume. Large traders compare their fills with it. Shown on 1m to 30m stock charts.", TA_IND_TESTED.vwap],
+  ["RSI", "A 0 to 100 gauge of recent up moves against down moves over 14 candles. Above 70 is called overbought, below 30 oversold.", TA_IND_TESTED.rsi],
+  ["MACD", "The gap between a fast (12) and a slow (26) moving average, with its own 9-candle average (the signal line). Crossings are read as momentum turning.", TA_IND_TESTED.macd],
+];
+const TA_EX_KEY = "tb_ta_ex";
+const taExOn = () => {
+  try { return localStorage.getItem(TA_EX_KEY) === "1"; } catch (_) { return false; }
+};
+function taExSave(d) {
+  try { localStorage.setItem(TA_EX_KEY, d.open ? "1" : "0"); } catch (_) {}
+}
+function taExOpen() {
+  const t = $("sgx-chart-ta"),
+    d = t && t.querySelector && t.querySelector("details");
+  if (!d) return;
+  d.open = true;
+  taExSave(d);
+  try { d.scrollIntoView({ block: "nearest" }); } catch (_) {}
+}
+function taExplain() {
+  return (
+    `<details class="ta-ex"${taExOn() ? " open" : ""} ontoggle="taExSave(this)"><summary>What these terms mean</summary>` +
+    TA_EXPLAIN.map(
+      ([n, x, tst]) =>
+        `<div class="ta-exi"><b>${esc(n)}:</b> ${esc(x)}${tst ? `<div class="ta-tst">${esc(tst)}</div>` : ""}</div>`,
+    ).join("") +
+    "</details>"
+  );
+}
 const FX_LIST = [
   ["SGD=X", "USD/SGD"],
   ["EURUSD=X", "EUR/USD"],
@@ -4729,10 +4785,6 @@ function taDraw(c, ch, row, barTimes, daily, key) {
   } catch (_) {}
 }
 function taLegend(row, note, ctx) {
-  const o = (row && row.overlays) || {};
-  const on = TA_OVS.filter(([k]) => taOv.includes(k))
-    .map(([k, n]) => `<div><b>${n}:</b> ${esc(TA_TESTED[k])}</div>`)
-    .join("");
   const when =
     row && row.updated_at
       ? (taF("ymd").format(new Date(row.updated_at)) !== taF("ymd").format(new Date())
@@ -4742,20 +4794,20 @@ function taLegend(row, note, ctx) {
         " " +
         taZone()
       : "unknown";
-  const trend = ["up", "down", "none"].includes(o.trend) ? o.trend : "none";
   return (
-    on +
+    `<div style="margin-top:8px">Every layer on this chart tested no better than random entries. <span class="ta-lnk" onclick="taExOpen()">What do these mean?</span></div>` +
+    `<div class="sub" style="margin-top:4px">${note ? esc(note) + " · " : ""}updated ${esc(when)}</div>` +
     taIndLegend(ctx) +
-    (note ? `<div style="margin-top:4px">${esc(note)}</div>` : "") +
-    `<div style="margin-top:4px">Updated ${esc(when)} · Trend: ${esc(trend)}</div>`
+    taExplain()
   );
 }
-// The textbook TA read, in plain English, from overlays.read
+// The textbook TA read, in plain English, from overlays.read: four short lines
 function taRead(row, sym) {
   const r = row && row.overlays && row.overlays.read;
   if (!r || typeof r !== "object") return "";
   const d = taDec(sym) + (taIsFx(sym) ? 1 : 0),
     px = (v) => esc(fmt(v, d)),
+    num = (v) => v != null && v !== "" && isFinite(Number(v)),
     lv = (x) =>
       x && x.price != null
         ? `${px(x.price)} (${esc(taTfName(x.tf))})`
@@ -4764,47 +4816,45 @@ function taRead(row, sym) {
   const tb =
     r.trend_by_tf && typeof r.trend_by_tf === "object" ? r.trend_by_tf : {};
   const tfs = TA_TFS.filter((k) => tb[k] != null).reverse();
-  if (tfs.length)
+  const chips = tfs.length
+    ? `<span class="ta-tfs">${tfs
+        .map((k) => {
+          const v = tb[k];
+          return `<span class="${v === "up" ? "up" : v === "down" ? "down" : ""}">${esc(taTfName(k))} ${v === "up" ? "▲" : v === "down" ? "▼" : "-"}</span>`;
+        })
+        .join("")}</span>`
+    : "";
+  if (r.bias || chips) {
+    const b = r.bias === "up" ? "up" : r.bias === "down" ? "down" : "mixed";
     rows.push(
-      `Trend: ${tfs.map((k) => esc(taTfName(k)) + " " + esc(tb[k])).join(", ")}`,
+      (r.bias
+        ? `Bias (${taTf === "1w" ? "weekly" : taTf === "1d" ? "daily" : "4h and daily"}): <span class="ta-pill ${b}">${b === "up" ? "Up" : b === "down" ? "Down" : "Mixed"}</span>`
+        : "") + chips,
     );
-  if (r.bias)
+  }
+  const s = r.setup;
+  const z = s && Array.isArray(s.zone) ? s.zone : [];
+  if (s && s.side && z.length === 2 && z.every(num) && num(s.stop) && num(s.target)) {
+    const long = s.side === "long",
+      far = long ? r.nearest_resistance : r.nearest_support,
+      ttf =
+        far && far.tf && Number(far.price) === Number(s.target)
+          ? ` (${esc(taTfName(far.tf))})`
+          : "";
     rows.push(
-      `Bias (${taTf === "1w" ? "weekly" : taTf === "1d" ? "daily" : "4h and daily"}): ${esc(r.bias)}`,
+      `<b>Plan:</b><div class="ta-grid"><span>${long ? "Buy zone" : "Sell zone"}</span><b>${px(Math.min(z[0], z[1]))} to ${px(Math.max(z[0], z[1]))}</b><span>Stop</span><b>${px(s.stop)}</b><span>Target</span><b>${px(s.target)}${ttf}</b><span>Reward to risk</span><b>${s.rr != null ? esc(fmt(s.rr, 1)) : "n/a"}</b></div>${s.trigger ? `<div class="sub" style="margin-top:2px">${esc(s.trigger)}</div>` : ""}`,
     );
+  } else if (s && s.side) rows.push("<b>Plan:</b> Wait: no usable stop and target yet");
+  else if (s && s.wait) rows.push(`<b>Plan:</b> Wait: ${esc(s.wait)}`);
   rows.push(
-    `Nearest support: ${lv(r.nearest_support)}. Nearest resistance: ${lv(r.nearest_resistance)}`,
+    `Support ${lv(r.nearest_support)} · Resistance ${lv(r.nearest_resistance)}`,
   );
   const pat = r.last_pattern,
     ch = r.last_choch;
   rows.push(
-    `Last pattern: ${pat ? esc(typeof pat === "object" ? (pat.name || "") + (pat.side && !/\((bull|bear)\)$/.test(pat.name || "") ? " (" + pat.side + ")" : "") : pat) : "none"}`,
+    `<span class="sub">Last pattern: ${pat ? esc(typeof pat === "object" ? (pat.name || "") + (pat.side && !/\((bull|bear)\)$/.test(pat.name || "") ? " (" + pat.side + ")" : "") : pat) : "none"} · Last CHoCH: ${ch ? esc(typeof ch === "object" ? (ch.side || "") + (ch.price != null ? " at " + fmt(ch.price, d) : "") : ch) : "none"}</span>`,
   );
-  rows.push(
-    `Last CHoCH: ${ch ? esc(typeof ch === "object" ? (ch.side || "") + (ch.price != null ? " at " + fmt(ch.price, d) : "") : ch) : "none"}`,
-  );
-  const s = r.setup;
-  if (s && s.side) {
-    const long = s.side === "long",
-      z = Array.isArray(s.zone) ? s.zone : [];
-    const near = long ? r.nearest_support : r.nearest_resistance,
-      far = long ? r.nearest_resistance : r.nearest_support;
-    const ztf =
-      near && near.tf
-        ? ` (${esc(taTfName(near.tf))} ${long ? "support" : "resistance"})`
-        : "";
-    const ttf =
-      far && far.tf && Number(far.price) === Number(s.target)
-        ? ` (${esc(taTfName(far.tf))} ${long ? "resistance" : "support"})`
-        : "";
-    rows.push(
-      `<b>${long ? "Long" : "Short"} setup:</b> wait for price in ${px(z[0])} to ${px(z[1])}${ztf}; ${s.trigger ? esc(s.trigger) + "; " : ""}stop ${px(s.stop)}; target ${px(s.target)}${ttf}; reward to risk ${s.rr != null ? esc(fmt(s.rr, 1)) : "n/a"}`,
-    );
-  } else if (s && s.wait) rows.push(`<b>No setup now:</b> ${esc(s.wait)}`);
-  return (
-    `<div class="sec" style="margin-top:10px">${esc(TA_READ_H)}</div>` +
-    rows.map((x) => `<div>${x}</div>`).join("")
-  );
+  return `<div class="ta-card">${rows.map((x) => `<div>${x}</div>`).join("")}</div>`;
 }
 // 1d on a US stock: the daily chart stays as it was; overlays from a tf "1d" row are added when one exists
 async function taDaily(id, sym, c, bars, seq) {
@@ -4992,15 +5042,17 @@ const taPsw = () =>
   taInd.includes("rsi") || taInd.includes("macd") ? { minimumWidth: 76 } : {};
 function taIndLegend(ctx) {
   const c = ctx || {};
-  return TA_INDS.filter(([k]) => taInd.includes(k) && !(k === "vwap" && c.fx))
+  const on = TA_INDS.filter(([k]) => taInd.includes(k) && !(k === "vwap" && c.fx));
+  if (!on.length) return "";
+  return `<div class="sub" style="margin-top:4px">Indicators: ${on
     .map(
       ([k, , n]) =>
-        `<div><b>${esc(n)}:</b> ${esc(TA_IND_TESTED[k])}${k === "vwap" && !taVwapOk(c.fx, c.tf) ? " " + esc("Drawn on the 1m to 30m charts only.") : ""}<br>${TA_IND_KEY[k]
+        `${esc(n)}${TA_IND_KEY[k]
           .filter((x, i) => !(k === "ma" && i > 0 && !c.fx && (c.tf === undefined || c.tf === "1d")))
           .map(([col, name]) => `<i style="background:${TA_IND_COL[col]}"></i>${esc(name)}`)
-          .join("")}</div>`,
+          .join("")}`,
     )
-    .join("");
+    .join(" · ")}</div>`;
 }
 // rows: [{time, t (epoch seconds or null), h, l, c, v}] in chart order. Lines go on the main chart ch (left out of its
 // autoscale); RSI and MACD each get their own 110 px chart, time-synced both ways. o.daily = the old daily chart,
