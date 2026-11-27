@@ -3600,7 +3600,7 @@ async function drawChart(id, sym) {
     for (const x of ["-ta", "-read"]) { const b = $(id + x); if (b) b.innerHTML = ""; }   // nothing from an intraday view under the daily chart
   }
   let bars;
-  try { bars = await getBars(sym); } catch (_) { if (!stale()) el.innerHTML = `<div class="empty">Could not load chart.</div>`; return; }
+  try { bars = await getBars(sym); } catch (_) { if (!stale()) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; if (id === "sgx-chart") taIndClear(); } return; }
   if (stale()) return;
   const live = sgxCache.res[sym]?.data;   // today's session so far, from the 5-minute price job
   if (bars.length && live && live.day && live.day_open && live.price) {
@@ -3610,7 +3610,7 @@ async function drawChart(id, sym) {
     else if (live.day === lastDay) bars = bars.slice(0, -1).concat([today]);
   }
   if ($(id) !== el) return;   // card re-rendered while loading
-  if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; return; }
+  if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; if (id === "sgx-chart") taIndClear(); return; }
   const n = (RANGES.find(r => r[0] === chartRng) || RANGES[1])[1];
   if (charts[id]) { try { charts[id].remove(); } catch (_) {} }
   if (id === "sgx-chart") taIndClear();
@@ -3646,7 +3646,7 @@ async function drawChart(id, sym) {
     if (!sym.endsWith(".SI")) {
       // indicators from the daily bars this chart already has; its own 50 and 200-day lines are not drawn twice
       taIndDraw(ch, bars.map(b => ({ time: b[0], t: null, h: b[2], l: b[3], c: b[4], v: b[5] })),
-        { fx: false, tf: "1d", daily: true, range: { from: Math.max(0, bars.length - n), to: bars.length - 1 }, up, dn, txt, line });
+        { fx: false, tf: "1d", daily: true, dec: 2, range: { from: Math.max(0, bars.length - n), to: bars.length - 1 }, up, dn, txt, line });
       const taE = $(id + "-ta"); if (taE) taE.innerHTML = taIndLegend({ fx: false, tf: "1d" });
       taDaily(id, sym, c, bars, seq);
     }
@@ -3854,7 +3854,7 @@ function taControls(sym) {
       TA_INDS.map(([k, n]) =>
         k === "vwap" && taIsFx(sym)
           ? `<div class="chip" style="padding:3px 9px;font-size:12px;opacity:.55" title="Currencies have no volume">VWAP needs volume</div>`
-          : `<div class="chip ${taInd.includes(k) ? "sel" : ""}" style="padding:3px 9px;font-size:12px" onclick="toggleTaInd('${k}')">${n}</div>`,
+          : `<div class="chip ${taInd.includes(k) ? "sel" : ""}" data-k="${k}" style="padding:3px 9px;font-size:12px" onclick="toggleTaInd('${k}')">${k === "vwap" && taVwapShort ? TA_VWAP_SHORT : n}</div>`,
       ).join("");
 }
 function setTaTf(k) {
@@ -4183,7 +4183,7 @@ async function taDaily(id, sym, c, bars, seq) {
     taKey(sym, "1d"),
   );
   const el = $(id + "-ta");
-  if (el) el.innerHTML = taLegend(row, TA_DAILY_NOTE);
+  if (el) el.innerHTML = taLegend(row, TA_DAILY_NOTE, { fx: false, tf: "1d" });
   const rd = $(id + "-read");
   if (rd) rd.innerHTML = taRead(row, sym);
 }
@@ -4267,8 +4267,15 @@ function taMacd(v, fast, slow, sig) {
     ),
   };
 }
-// running (high + low + close) / 3 weighted by volume, started again whenever days[i] changes
-function taVwap(h, l, c, v, days) {
+// Regular-session VWAP: per New York date (days[i]), (high + low + close) / 3 weighted by volume, counted from the
+// 09:30 bar (mins[i] = minutes after New York midnight; extended-hours bars after the close continue the same day).
+// A day whose data starts after 09:30 has no true session start, so the whole day is null.
+const TA_SESSION_OPEN = 570;
+function taVwap(h, l, c, v, days, mins) {
+  const first = {};
+  days.forEach((d, i) => {
+    if (!(d in first) || mins[i] < first[d]) first[d] = mins[i];
+  });
   let day = null,
     pv = 0,
     vv = 0;
@@ -4278,12 +4285,46 @@ function taVwap(h, l, c, v, days) {
       pv = 0;
       vv = 0;
     }
+    if (first[day] > TA_SESSION_OPEN || mins[i] < TA_SESSION_OPEN) return null;
     const vol = Number(v[i]) || 0;
     pv += ((h[i] + l[i] + c[i]) / 3) * vol;
     vv += vol;
     return vv > 0 ? pv / vv : null;
   });
 }
+const taNYHM = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "America/New_York",
+  hourCycle: "h23",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const taNYMin = (t) => {
+  const p = taNYHM.format(new Date(t * 1000)).split(":");
+  return Number(p[0]) * 60 + Number(p[1]);
+};
+// true when the last draw had no day that starts by 09:30: the chip then says so
+let taVwapShort = false;
+const TA_VWAP_SHORT = "VWAP needs the whole session: try 5m or higher";
+const TA_IND_COL = {
+  ma20: "#26c6da",
+  ma50: "#f06292",
+  ma200: "#ffb84d",
+  ema9: "#ff7043",
+  ema21: "#a1887f",
+  bb: "#7fa6c9",
+  vwap: "#e056fd",
+  rsi: "#4da3ff",
+  macd: "#4da3ff",
+  sig: "#ffb84d",
+};
+const TA_IND_KEY = {
+  ma: [["ma20", "20-bar"], ["ma50", "50-bar"], ["ma200", "200-bar"]],
+  ema: [["ema9", "9-bar"], ["ema21", "21-bar"]],
+  bb: [["bb", "upper and lower band"], ["bb", "20-bar middle (dashed)"]],
+  vwap: [["vwap", "VWAP"]],
+  rsi: [["rsi", "RSI 14 in the chart below, dashed at 30 and 70"]],
+  macd: [["macd", "MACD line"], ["sig", "signal line"]],
+};
 const TA_VWAP_TFS = ["1m", "5m", "15m", "30m", "1h", "4h"];
 const taVwapOk = (fx, tf) => !fx && TA_VWAP_TFS.includes(tf);
 const TA_SUBS = ["sgx-chart-rsi", "sgx-chart-macd"];
@@ -4305,13 +4346,16 @@ function taIndClear() {
 }
 // a price scale at least this wide on the main chart and the small ones keeps their time axes in line
 const taPsw = () =>
-  taInd.includes("rsi") || taInd.includes("macd") ? { minimumWidth: 64 } : {};
+  taInd.includes("rsi") || taInd.includes("macd") ? { minimumWidth: 76 } : {};
 function taIndLegend(ctx) {
   const c = ctx || {};
   return TA_INDS.filter(([k]) => taInd.includes(k) && !(k === "vwap" && c.fx))
     .map(
       ([k, , n]) =>
-        `<div><b>${esc(n)}:</b> ${esc(TA_IND_TESTED[k])}${k === "vwap" && !taVwapOk(c.fx, c.tf) ? " " + esc("Drawn on the 1m to 4h charts only.") : ""}</div>`,
+        `<div><b>${esc(n)}:</b> ${esc(TA_IND_TESTED[k])}${k === "vwap" && !taVwapOk(c.fx, c.tf) ? " " + esc("Drawn on the 1m to 4h charts only.") : ""}<br>${TA_IND_KEY[k]
+          .filter((x, i) => !(k === "ma" && i > 0 && !c.fx && (c.tf === undefined || c.tf === "1d")))
+          .map(([col, name]) => `<i style="background:${TA_IND_COL[col]}"></i>${esc(name)}`)
+          .join("")}</div>`,
     )
     .join("");
 }
@@ -4319,7 +4363,13 @@ function taIndLegend(ctx) {
 // autoscale); RSI and MACD each get their own 110 px chart, time-synced both ways. o.daily = the old daily chart,
 // which already draws the 50 and 200-day lines.
 function taIndDraw(ch, rows, o) {
-  if (!taInd.length || !rows.length) return;
+  taVwapShort = false;
+  const chip = () => {
+    const bx = $("sgx-chart-ind"),
+      v = bx && bx.querySelector && bx.querySelector('[data-k="vwap"]');
+    if (v) v.textContent = taVwapShort ? TA_VWAP_SHORT : "VWAP";
+  };
+  if (!taInd.length || !rows.length) return chip();
   const on = (k) => taInd.includes(k),
     cl = rows.map((r) => r.c),
     ok = (x) => x != null && isFinite(x);
@@ -4342,36 +4392,36 @@ function taIndDraw(ch, rows, o) {
   try {
     if (on("ma"))
       [
-        [20, "#c08cff"],
-        [50, "#4da3ff"],
-        [200, "#ffb84d"],
+        [20, TA_IND_COL.ma20],
+        [50, TA_IND_COL.ma50],
+        [200, TA_IND_COL.ma200],
       ].forEach(([n, col]) => {
         if (!(o.daily && n > 20)) line(taSma(cl, n), col);
       });
     if (on("ema")) {
-      line(taEma(cl, 9), "#ffd24d");
-      line(taEma(cl, 21), "#ff8a65");
+      line(taEma(cl, 9), TA_IND_COL.ema9);
+      line(taEma(cl, 21), TA_IND_COL.ema21);
     }
     if (on("bb")) {
       const b = taBollinger(cl, 20, 2);
-      line(b.up, "#7fa6c9");
-      line(b.lo, "#7fa6c9");
-      line(b.mid, "#7fa6c9", 2);
+      line(b.up, TA_IND_COL.bb);
+      line(b.lo, TA_IND_COL.bb);
+      line(b.mid, TA_IND_COL.bb, 2);
     }
     if (on("vwap") && taVwapOk(o.fx, o.tf)) {
-      const days = rows.map((r) => taNYDate.format(new Date(r.t * 1000)));
-      line(
-        taVwap(
-          rows.map((r) => r.h),
-          rows.map((r) => r.l),
-          cl,
-          rows.map((r) => r.v),
-          days,
-        ),
-        "#e056fd",
+      const vw = taVwap(
+        rows.map((r) => r.h),
+        rows.map((r) => r.l),
+        cl,
+        rows.map((r) => r.v),
+        rows.map((r) => taNYDate.format(new Date(r.t * 1000))),
+        rows.map((r) => taNYMin(r.t)),
       );
+      if (vw.some(ok)) line(vw, TA_IND_COL.vwap);
+      else taVwapShort = true;
     }
   } catch (_) {}
+  chip();
   const subs = [];
   const sub = (id) => {
     const el = $(id);
@@ -4394,7 +4444,7 @@ function taIndDraw(ch, rows, o) {
       },
       rightPriceScale: {
         borderVisible: false,
-        minimumWidth: 64,
+        minimumWidth: 76,
         scaleMargins: { top: 0.1, bottom: 0.1 },
       },
       timeScale: date
@@ -4431,7 +4481,7 @@ function taIndDraw(ch, rows, o) {
       const sc = sub("sgx-chart-rsi");
       if (sc) {
         const s = sc.addLineSeries({
-          color: "#4da3ff",
+          color: TA_IND_COL.rsi,
           lineWidth: 1,
           priceLineVisible: false,
           title: "RSI 14",
@@ -4455,8 +4505,14 @@ function taIndDraw(ch, rows, o) {
     if (on("macd")) {
       const sc = sub("sgx-chart-macd");
       if (sc) {
-        const m = taMacd(cl, 12, 26, 9);
+        const m = taMacd(cl, 12, 26, 9),
+          pf = {
+            type: "price",
+            precision: o.dec + 2,
+            minMove: Math.pow(10, -(o.dec + 2)),
+          };
         sc.addHistogramSeries({
+          priceFormat: pf,
           priceLineVisible: false,
           lastValueVisible: false,
         }).setData(
@@ -4471,14 +4527,16 @@ function taIndDraw(ch, rows, o) {
           ),
         );
         sc.addLineSeries({
-          color: "#4da3ff",
+          color: TA_IND_COL.macd,
+          priceFormat: pf,
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
           title: "MACD",
         }).setData(full(m.line));
         sc.addLineSeries({
-          color: "#ffb84d",
+          color: TA_IND_COL.sig,
+          priceFormat: pf,
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
@@ -4641,7 +4699,7 @@ async function drawIntraday(id, sym, seq) {
   taIndDraw(
     ch,
     bars.map(({ k, b }) => ({ time: k, t: b[0], h: b[2], l: b[3], c: b[4], v: b[5] })),
-    { fx, tf, daily: false, range: rng, up, dn, txt, line },
+    { fx, tf, daily: false, dec, range: rng, up, dn, txt, line },
   );
   const last = bars[bars.length - 1].b;
   if (legEl)
