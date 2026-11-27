@@ -2243,6 +2243,7 @@ async function ordReview() {
   const { error } = await sb.from("tb_tiger_orders").insert({ symbol: sgxSel, side: ordSide, qty: q, limit_price: px, currency: ordCur(d), mode: ORD_MODE });
   if (error) return toast("Order not queued: " + (error.message.includes("policy") ? "wrong passcode" : error.message));
   toast("Order queued: the laptop sends it within about 10 s"); loadOrders();
+  return true;
 }
 // ---- Prices board: every stock in tb_universe (most-traded pools + research
 // list + the market ETF), refreshed by the laptop every 5 minutes in market
@@ -4311,21 +4312,28 @@ const taTkRound = (px, us) => {
   return Math.round(Math.round(px / t) * t * 1000) / 1000;
 };
 const taTkDec = (px, us) => (taTkTick(px, us) < 0.01 ? 3 : 2);
+const taHoldKnown = () => !!(holdRow && holdRow.data && Array.isArray(holdRow.data.positions));
 const taHoldOf = (sym) => {
-  const P = (holdRow && holdRow.data && holdRow.data.positions) || [];
-  return P.filter((p) => p && p.kind === "STK" && p.symbol && (p.symbol === sym || shortSym(String(p.symbol)) === shortSym(sym)));
+  const P = (holdRow && holdRow.data && holdRow.data.positions) || [],
+    ccy = sym.endsWith(".SI") ? "SGD" : "USD";
+  return P.filter(
+    (p) =>
+      p && p.kind === "STK" && p.symbol && (!p.currency || p.currency === ccy) && (p.symbol === sym || shortSym(String(p.symbol)) === shortSym(sym)),
+  );
 };
 // whole shares of this stock in the practice account (0 when the holdings are not loaded)
 const taHeld = (sym) => taHoldOf(sym).reduce((a, p) => a + (Number(p.qty) || 0), 0);
+// what the ticket's chip and plan text depend on: when it changes the ticket is redrawn
+const taTkSig = (c, sym) => JSON.stringify([taPlan(c), taHeld(sym), taHoldKnown(), !!(taTk && taTk.plan)]);
 // the TA read's setup, only when it has a side, a zone, a stop and a target
 function taPlan(c) {
   const su = c && c._row && c._row.overlays && c._row.overlays.read && c._row.overlays.read.setup;
-  if (!su || !su.side || su.stop == null || su.target == null) return null;
+  if (!su || (su.side !== "long" && su.side !== "short") || su.stop == null || su.target == null) return null;
   const z = (Array.isArray(su.zone) ? su.zone : []).map(Number),
     stop = Number(su.stop),
     target = Number(su.target);
   if (z.length !== 2 || !z.every(taFin) || !taFin(stop) || !taFin(target)) return null;
-  return { long: taLong(su.side), mid: (z[0] + z[1]) / 2, stop, target };
+  return { long: su.side === "long", mid: (z[0] + z[1]) / 2, stop, target };
 }
 function taTradeRender(c) {
   const x = c && c._dr;
@@ -4350,8 +4358,20 @@ function taTradeRender(c) {
     },
     f = (v) => fmt(v, taTkDec(v, us));
   if (taTk && taTk.sym === x.sym) {
-    add(taTk.px, taTk.side === "BUY" ? up : dn, (taTk.side === "BUY" ? "Buy " : "Sell ") + f(taTk.px), 2);
     if (taTk.plan) {
+      const cur = taPlan(c);
+      if (!cur || (cur.long ? "BUY" : "SELL") !== taTk.plan.side) taTk.plan = null;
+      else {
+        taTk.plan.stop = cur.stop;
+        taTk.plan.target = cur.target;
+      }
+    }
+    if (taTkSig(c, x.sym) !== taTk.sig) {
+      taTkSync();
+      taTkUi();
+    }
+    add(taTk.px, taTk.side === "BUY" ? up : dn, (taTk.side === "BUY" ? "Buy " : "Sell ") + f(taTk.px), 2);
+    if (taTk.plan && !taOv.includes("entries")) {
       add(taTk.plan.stop, dn, "Stop " + f(taTk.plan.stop), 2);
       add(taTk.plan.target, up, "Target " + f(taTk.plan.target), 2);
     }
@@ -4400,28 +4420,47 @@ function taTkOpen(sym, side, price) {
   taTkUi();
   taTradeRefresh();
 }
+// shares as typed: a whole number above 0, else NaN (10.5 is refused, not cut to 10)
+function taTkQty() {
+  const s = String(($("tk-qty") || {}).value == null ? "" : $("tk-qty").value).trim();
+  return /^\d+$/.test(s) && parseInt(s, 10) > 0 ? parseInt(s, 10) : NaN;
+}
 function taTkSync() {
   if (!taTk) return;
   const px = parseFloat(($("tk-px") || {}).value),
-    q = parseInt(($("tk-qty") || {}).value, 10);
+    q = taTkQty();
   if (px > 0) taTk.px = px;
   if (q > 0) taTk.qty = q;
 }
+// the estimate, the limit-vs-last note and every warning; also run on each keystroke (the ticket is not redrawn)
 function taTkEst() {
   const el = $("tk-est"),
+    wr = $("tk-warn"),
     d = ordData();
   if (!el || !taTk || !d) return;
-  const q = parseInt(($("tk-qty") || {}).value, 10),
-    px = parseFloat(($("tk-px") || {}).value);
+  const q = taTkQty(),
+    px = parseFloat(($("tk-px") || {}).value),
+    us = !taTk.sym.endsWith(".SI"),
+    cur = d.currency === "USD" ? "US$" : "S$";
+  let w = "";
+  if (taTk.side === "SELL") {
+    if (!taHoldKnown())
+      w = "Holdings not loaded yet: enter your passcode in Portfolio to check what you hold. Selling more than you hold is refused.";
+    else if (q > taHeld(taTk.sym)) w = "Selling short is not possible in this account.";
+  }
+  if (px > 0 && d.price && Math.abs(px / d.price - 1) > 0.1)
+    w += (w ? " " : "") + "This limit is more than 10% from the last price: orders that far from it are refused.";
+  if (wr) wr.innerHTML = esc(w);
   if (!(q > 0) || !(px > 0)) {
     el.textContent = "";
     return;
   }
-  const us = !taTk.sym.endsWith(".SI"),
-    cur = d.currency === "USD" ? "US$" : "S$",
-    v = q * px,
-    fee = ordFees(v, q, us);
-  el.innerHTML = `${taTk.side === "BUY" ? "Cost" : "Proceeds"} about <b>${esc(cur)}${esc(fmt(v, 2))}</b> + fees about ${esc(cur)}${esc(fmt(fee, 2))} (${esc((fee / v * 100).toFixed(2))}%)`;
+  const v = q * px,
+    fee = ordFees(v, q, us),
+    off = d.price ? px / d.price - 1 : 0;
+  el.innerHTML =
+    `${taTk.side === "BUY" ? "Cost" : "Proceeds"} about <b>${esc(cur)}${esc(fmt(v, 2))}</b> + fees about ${esc(cur)}${esc(fmt(fee, 2))} (${esc((fee / v * 100).toFixed(2))}%)` +
+    (Math.abs(off) > 0.005 ? ` · limit is ${esc(signed(off * 100, 1, true))} vs last price` : "");
 }
 // typing in the ticket: the price line follows; the ticket itself is not redrawn (the keyboard stays up)
 function taTkIn() {
@@ -4439,9 +4478,12 @@ function taTkSide(sd) {
 }
 function taTkPlan() {
   const plan = taTk && taPlan(chartC["sgx-chart"]);
-  if (!plan || (!plan.long && taHeld(taTk.sym) <= 0)) return;
+  if (!plan) return;
+  const held = taHeld(taTk.sym);
+  if (!plan.long && held <= 0) return;
   taTkSync();
   taTk.side = plan.long ? "BUY" : "SELL";
+  if (!plan.long) taTk.qty = Math.max(1, Math.min(taTk.qty, Math.floor(held)));
   taTk.px = taTkRound(plan.mid, !taTk.sym.endsWith(".SI"));
   taTk.plan = { stop: plan.stop, target: plan.target, side: taTk.side };
   taTkUi();
@@ -4456,12 +4498,14 @@ function taTkUi() {
     taFsFit();
     return;
   }
-  const us = !t.sym.endsWith(".SI"),
+  const c = chartC["sgx-chart"],
+    us = !t.sym.endsWith(".SI"),
     dec = taTkDec(t.px, us),
-    plan = taPlan(chartC["sgx-chart"]),
+    plan = taPlan(c),
     held = taHeld(t.sym),
     chip = (label, fn, on) =>
       `<div class="chip ${on ? "sel" : ""}" style="padding:3px 12px;font-size:13px" onclick="${fn}">${label}</div>`;
+  t.sig = taTkSig(c, t.sym);
   let planH = "";
   if (plan)
     planH =
@@ -4469,9 +4513,7 @@ function taTkUi() {
         ? `<div class="chips" style="margin-top:6px">${chip("Use the plan", "taTkPlan()", false)}</div>`
         : `<div class="sub" style="margin-top:6px">Selling short is not possible in this account.</div>`;
   if (t.plan)
-    planH +=
-      `<div class="sub" style="margin-top:6px">Plan: ${t.side === "BUY" ? "buy" : "sell"} near ${esc(fmt(t.px, dec))}. Stop ${esc(fmt(t.plan.stop, dec))}, target ${esc(fmt(t.plan.target, dec))}.</div>` +
-      `<div class="sub" style="margin-top:4px">Tiger orders here are limit orders for today only, with no automatic stop. Watch the stop yourself or set a price alert.</div>`;
+    planH += `<div class="sub" style="margin-top:6px">Plan: ${t.side === "BUY" ? "buy" : "sell"} near ${esc(fmt(t.px, dec))}. Stop ${esc(fmt(t.plan.stop, dec))}, target ${esc(fmt(t.plan.target, dec))}.</div>`;
   el.innerHTML = `<div style="margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:10px">
     <div class="chips" style="align-items:center"><b style="font-size:13px">Order ticket</b><span class="sub">practice account</span>${chip("Buy", "taTkSide('BUY')", t.side === "BUY")}${chip("Sell", "taTkSide('SELL')", t.side === "SELL")}</div>
     <div class="ord-f">
@@ -4480,27 +4522,36 @@ function taTkUi() {
     </div>
     ${us ? "" : `<div class="sub" style="margin-top:4px">SGX trades in lots of 100.</div>`}
     <div class="sub" id="tk-est" style="margin-top:6px"></div>
-    ${t.side === "SELL" && held <= 0 ? `<div class="sub warn" style="margin-top:4px">Tiger refuses a sale of shares the account does not hold.</div>` : ""}
+    <div class="sub warn" id="tk-warn" style="margin-top:4px"></div>
     ${planH}
+    <div class="sub" style="margin-top:6px">Tiger orders here are limit orders for today only, with no automatic stop. Watch the stop yourself or set a price alert.</div>
     <div class="chips" style="margin-top:8px"><button onclick="taTkReview()">Review order</button><button class="ghost" onclick="taTkClose()">Cancel</button></div>
   </div>`;
   taTkEst();
   taFsFit();
 }
 // the one way out: the Order card's own fields, then ordReview() (passcode, PRACTICE ACCOUNT confirm, insert)
-function taTkReview() {
+async function taTkReview() {
   if (!taTk) return;
   taTkSync();
-  const q = parseInt(($("tk-qty") || {}).value, 10),
-    px = parseFloat(($("tk-px") || {}).value);
-  if (taTk.sym !== sgxSel) return taTkClose();
-  if (!(q > 0)) return toast("Enter a whole number of shares");
+  const sym = taTk.sym,
+    us = !sym.endsWith(".SI"),
+    q = taTkQty();
+  let px = parseFloat(($("tk-px") || {}).value);
+  if (sym !== sgxSel) return taTkClose();
+  if (!(q > 0)) return toast("Shares must be a whole number above 0");
   if (!(px > 0)) return toast("Enter a limit price");
+  px = taTkRound(px, us); // the confirm and the queued row show the price the exchange accepts
+  taTk.px = px;
+  if ($("tk-px")) $("tk-px").value = px.toFixed(taTkDec(px, us));
+  if (taTk.side === "SELL" && taHoldKnown() && q > taHeld(sym)) return toast("Selling short is not possible in this account.");
   if (ordKind !== "stock") ordSetKind("stock");
   ordSetSide(taTk.side);
   $("ord-px").value = px;
   $("ord-qty").value = q;
-  return ordReview();
+  taTradeRefresh();
+  const queued = await ordReview();
+  if (queued === true && taTk && taTk.sym === sym) taTkClose();
 }
 // ---- Research chart view: a tall chart you can zoom and scroll, kept across rebuilds, full screen, and the candle readout.
 // Dragging sideways pans; a vertical drag over the chart still scrolls the page (vertTouchDrag off).
@@ -4726,6 +4777,9 @@ function taControls(sym) {
     taDrawMode = null;
     taDrawPend = null;
     taTkClose(true);
+  } else if (taTk && taTk.sym === sym) {
+    const tk = $("sgx-chart-tk");
+    if (tk && !tk.firstChild) taTkUi();
   }
   if (sym.endsWith(".SI")) {
     tf.innerHTML = taNavChips();
