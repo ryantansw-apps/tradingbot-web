@@ -3971,11 +3971,13 @@ function taDrawRender(c) {
 function taDrawInit(c, ch, sym, barTimes) {
   c._dr = { ch, sym, bt: barTimes, ep: barTimes.map(taEpoch) };
   try {
-    ch.subscribeClick((p) => taDrawClick(c, p));
+    ch.subscribeClick((p) => taDrawClick(c, p, false));
+    // a second tap within about half a second arrives as a double click: it places a point as well
+    ch.subscribeDblClick((p) => taDrawClick(c, p, true));
   } catch (_) {}
   taDrawRender(c);
 }
-function taDrawClick(c, p) {
+function taDrawClick(c, p, dbl) {
   const x = c._dr;
   if (!taDrawMode || !x || chartC["sgx-chart"] !== c || !p || !p.point) return;
   let price;
@@ -3997,7 +3999,11 @@ function taDrawClick(c, p) {
     if (taDrawMode !== "line") return;
     t = Math.floor(Date.now() / 1000);
   }
-  const pt = { t, p: price };
+  const pt = { t, p: price },
+    last = c._drLast;
+  c._drLast = pt;
+  // the double click of a tap pair already handled as a click is not counted twice
+  if (dbl && last && last.t === t && Math.abs(last.p - price) <= 1e-6 * Math.max(1, Math.abs(price))) return;
   if (taDrawMode === "line") return taDrawAdd(x.sym, { type: "line", a: pt });
   if (!taDrawPend) {
     taDrawPend = pt;
