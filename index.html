@@ -1347,6 +1347,8 @@ function sgxDetail(d) {
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chartbox" id="sgx-chart-rsi" style="height:110px;display:none"></div>
     <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
+    <div class="chips" id="sgx-chart-draw" style="margin-top:6px"></div>
+    <div class="sub chart-leg" id="sgx-chart-draw-n"></div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
     <div class="sub chart-leg" id="sgx-chart-read"></div>
@@ -3648,6 +3650,7 @@ async function drawChart(id, sym) {
       taIndDraw(ch, bars.map(b => ({ time: b[0], t: null, h: b[2], l: b[3], c: b[4], v: b[5] })),
         { fx: false, tf: "1d", daily: true, dec: 2, range: { from: Math.max(0, bars.length - n), to: bars.length - 1 }, up, dn, txt, line });
       const taE = $(id + "-ta"); if (taE) taE.innerHTML = taIndLegend({ fx: false, tf: "1d" });
+      taDrawInit(c, ch, sym, bars.map((b) => b[0]));
       taDaily(id, sym, c, bars, seq);
     }
   }
@@ -3822,15 +3825,242 @@ const taKey = (sym, tf) =>
     : taIsFx(sym)
       ? (t) => (isFinite(t) ? new Date(t * 1000).toISOString().slice(0, 10) : t)
       : (t) => (isFinite(t) ? taNYDate.format(new Date(t * 1000)) : t);
+// ---- Drawing tools: a horizontal line, a trend ray and a box, saved per symbol on this device (localStorage
+// tb.draw.<symbol>) as {type, a: {t, p}, b?: {t, p}} with t in UTC epoch seconds (a daily or weekly chart date counts as 00:00 UTC)
+// and p a price. They are rebuilt with every chart render and never touch the autoscale.
+const TA_DRAW_MAX = 30,
+  TA_DRAW_TYPES = ["line", "trend", "box"],
+  TA_DRAW_COLOR = "#c58bff",
+  TA_DRAW_HINT = {
+    line: "Tap the chart to place the line.",
+    trend: "Tap the chart for the start of the trend line.",
+    box: "Tap the chart for the first corner of the box.",
+  };
+let taDrawMode = null,
+  taDrawPend = null,
+  taDrawSym = "";
+const taFin = (v) => typeof v === "number" && isFinite(v);
+const taPt = (x) => !!x && taFin(x.t) && taFin(x.p);
+const taDrawOk = (d) =>
+  !!d &&
+  TA_DRAW_TYPES.includes(d.type) &&
+  taPt(d.a) &&
+  (d.type === "line" || (taPt(d.b) && d.b.t !== d.a.t));
+function taDrawLoad(sym) {
+  try {
+    const raw = JSON.parse(localStorage.getItem("tb.draw." + sym) || "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter(taDrawOk)
+      .slice(0, TA_DRAW_MAX)
+      .map((d) =>
+        d.type === "line"
+          ? { type: d.type, a: { t: d.a.t, p: d.a.p } }
+          : {
+              type: d.type,
+              a: { t: d.a.t, p: d.a.p },
+              b: { t: d.b.t, p: d.b.p },
+            },
+      );
+  } catch (_) {
+    return [];
+  }
+}
+function taDrawSave(sym, list) {
+  try {
+    localStorage.setItem("tb.draw." + sym, JSON.stringify(list));
+  } catch (_) {}
+}
+// epoch seconds of a chart time: a number (intraday), a "YYYY-MM-DD" date or a {year, month, day} date
+const taEpoch = (v) => {
+  if (taFin(v)) return v;
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v))
+    return Date.parse(v + "T00:00:00Z") / 1000;
+  if (v && typeof v === "object" && taFin(v.year))
+    return Date.UTC(v.year, v.month - 1, v.day) / 1000;
+  return NaN;
+};
+// Draw every saved drawing of the chart's symbol on candle series c. Trend: a ray from the first bar at or after a.t to the
+// last bar, valued by linear interpolation in time. Box: top and bottom lines over the bars between its two corners.
+function taDrawRender(c) {
+  const x = c && c._dr;
+  if (!x) return;
+  (c._drLines || []).forEach((l) => {
+    try {
+      c.removePriceLine(l);
+    } catch (_) {}
+  });
+  (c._drSeries || []).forEach((s) => {
+    try {
+      x.ch.removeSeries(s);
+    } catch (_) {}
+  });
+  c._drLines = [];
+  c._drSeries = [];
+  const dec = taDec(x.sym);
+  const add = (pts) => {
+    if (!pts.length) return;
+    try {
+      const s = x.ch.addLineSeries({
+        color: TA_DRAW_COLOR,
+        lineWidth: 1,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null,
+      });
+      s.setData(pts);
+      c._drSeries.push(s);
+    } catch (_) {}
+  };
+  taDrawLoad(x.sym).forEach((d) => {
+    try {
+      if (d.type === "line") {
+        c._drLines.push(
+          c.createPriceLine({
+            price: d.a.p,
+            color: TA_DRAW_COLOR,
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: fmt(d.a.p, dec),
+          }),
+        );
+      } else if (d.type === "trend") {
+        const slope = (d.b.p - d.a.p) / (d.b.t - d.a.t),
+          pts = [];
+        x.bt.forEach((tm, i) => {
+          if (x.ep[i] >= d.a.t)
+            pts.push({ time: tm, value: d.a.p + slope * (x.ep[i] - d.a.t) });
+        });
+        add(pts);
+      } else {
+        const lo = Math.min(d.a.t, d.b.t),
+          hi = Math.max(d.a.t, d.b.t),
+          top = Math.max(d.a.p, d.b.p),
+          bot = Math.min(d.a.p, d.b.p),
+          ts = x.bt.filter((_, i) => x.ep[i] >= lo && x.ep[i] <= hi);
+        add(ts.map((tm) => ({ time: tm, value: top })));
+        add(ts.map((tm) => ({ time: tm, value: bot })));
+      }
+    } catch (_) {}
+  });
+}
+// barTimes = the chart times of the bars on screen (ascending)
+function taDrawInit(c, ch, sym, barTimes) {
+  c._dr = { ch, sym, bt: barTimes, ep: barTimes.map(taEpoch) };
+  try {
+    ch.subscribeClick((p) => taDrawClick(c, p));
+  } catch (_) {}
+  taDrawRender(c);
+}
+function taDrawClick(c, p) {
+  const x = c._dr;
+  if (!taDrawMode || !x || chartC["sgx-chart"] !== c || !p || !p.point) return;
+  let price;
+  try {
+    price = c.coordinateToPrice(p.point.y);
+  } catch (_) {
+    return;
+  }
+  if (!taFin(price)) return;
+  let t = taEpoch(p.time);
+  if (!taFin(t)) {
+    if (taDrawMode !== "line") return;
+    t = Math.floor(Date.now() / 1000);
+  }
+  const pt = { t, p: price };
+  if (taDrawMode === "line") return taDrawAdd(x.sym, { type: "line", a: pt });
+  if (!taDrawPend) {
+    taDrawPend = pt;
+    taDrawUi(x.sym);
+    return;
+  }
+  if (pt.t === taDrawPend.t) return; // the same bar twice has no width
+  taDrawAdd(x.sym, { type: taDrawMode, a: taDrawPend, b: pt });
+}
+function taDrawAdd(sym, d) {
+  const list = taDrawLoad(sym);
+  list.push(d);
+  taDrawSave(sym, list.slice(-TA_DRAW_MAX));
+  taDrawMode = null;
+  taDrawPend = null;
+  taDrawUi(sym);
+  taDrawRender(chartC["sgx-chart"]);
+}
+function setTaDraw(k) {
+  taDrawMode = taDrawMode === k ? null : k;
+  taDrawPend = null;
+  taDrawUi(taSym());
+}
+function taDrawUndo() {
+  const sym = taSym();
+  if (!sym) return;
+  if (taDrawPend) {
+    taDrawPend = null;
+    taDrawUi(sym);
+    return;
+  }
+  const list = taDrawLoad(sym);
+  if (!list.length) return;
+  list.pop();
+  taDrawSave(sym, list);
+  taDrawRender(chartC["sgx-chart"]);
+}
+function taDrawClear() {
+  const sym = taSym();
+  if (!sym || !taDrawLoad(sym).length) return;
+  if (!confirm("Remove all drawings for " + sym + "?")) return;
+  taDrawSave(sym, []);
+  taDrawMode = null;
+  taDrawPend = null;
+  taDrawUi(sym);
+  taDrawRender(chartC["sgx-chart"]);
+}
+function taDrawUi(sym) {
+  const el = $("sgx-chart-draw"),
+    n = $("sgx-chart-draw-n");
+  if (!el) return;
+  if (!sym || sym.endsWith(".SI")) {
+    el.innerHTML = "";
+    if (n) n.textContent = "";
+    return;
+  }
+  const chip = (label, fn, on) =>
+    `<div class="chip ${on ? "sel" : ""}" style="padding:3px 9px;font-size:12px" onclick="${fn}">${label}</div>`;
+  el.innerHTML =
+    `<div class="sub" style="align-self:center">Draw:</div>` +
+    [
+      ["line", "Line"],
+      ["trend", "Trend"],
+      ["box", "Box"],
+    ]
+      .map(([k, nm]) => chip(nm, `setTaDraw('${k}')`, taDrawMode === k))
+      .join("") +
+    chip("Undo", "taDrawUndo()", false) +
+    chip("Clear", "taDrawClear()", false);
+  if (n)
+    n.textContent =
+      (taDrawMode
+        ? (taDrawPend ? "Tap the second point." : TA_DRAW_HINT[taDrawMode]) +
+          " "
+        : "") + "Drawings are saved on this device only.";
+}
 function taControls(sym) {
   const tf = $("sgx-chart-tf"),
     ov = $("sgx-chart-ov"),
     ind = $("sgx-chart-ind");
   if (!tf || !ov) return;
+  if (taDrawSym !== sym) {
+    taDrawSym = sym;
+    taDrawMode = null;
+    taDrawPend = null;
+  }
   if (sym.endsWith(".SI")) {
     tf.innerHTML = "";
     ov.innerHTML = "";
     if (ind) ind.innerHTML = "";
+    taDrawUi(sym);
     taIndClear();
     for (const s of ["-ta", "-read"]) {
       const t = $("sgx-chart" + s);
@@ -3856,6 +4086,7 @@ function taControls(sym) {
           ? `<div class="chip" style="padding:3px 9px;font-size:12px;opacity:.55" title="Currencies have no volume">VWAP needs volume</div>`
           : `<div class="chip ${taInd.includes(k) ? "sel" : ""}" data-k="${k}" style="padding:3px 9px;font-size:12px" onclick="toggleTaInd('${k}')">${k === "vwap" && taVwapShort ? TA_VWAP_SHORT : n}</div>`,
       ).join("");
+  taDrawUi(sym);
 }
 function setTaTf(k) {
   taTf = k;
@@ -4691,6 +4922,12 @@ async function drawIntraday(id, sym, seq) {
     false,
     key,
   );
+  taDrawInit(
+    c,
+    ch,
+    sym,
+    bars.map((x) => x.k),
+  );
   const rng = {
     from: Math.max(0, bars.length - (daily ? 130 : 80)),
     to: bars.length - 1,
@@ -4726,6 +4963,8 @@ function renderFx() {
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chartbox" id="sgx-chart-rsi" style="height:110px;display:none"></div>
     <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
+    <div class="chips" id="sgx-chart-draw" style="margin-top:6px"></div>
+    <div class="sub chart-leg" id="sgx-chart-draw-n"></div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
     <div class="sub chart-leg" id="sgx-chart-read"></div>
