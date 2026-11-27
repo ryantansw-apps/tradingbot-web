@@ -3671,6 +3671,8 @@ const TA_TESTED = {
 };
 const TA_FEED =
   "Real-time prices from one exchange (IEX). Highs, lows and volume can differ slightly from the full market. Updates about every minute while the laptop is on.";
+const TA_DAILY_NOTE =
+  "Overlays on the daily chart come from IEX daily bars, so a gap or zone can differ slightly from the candles shown.";
 const TA_FEED_FX = "Currency prices from Yahoo, delayed a few minutes.";
 const TA_EMPTY =
   "No intraday data yet: the laptop job fills this during US trading hours.";
@@ -3744,6 +3746,8 @@ const TA_FMT = {
     minute: "2-digit",
   },
   hms: { hour: "2-digit", minute: "2-digit", second: "2-digit" },
+  ymd: { year: "numeric", month: "2-digit", day: "2-digit" },
+  wdm: { weekday: "short", day: "numeric", month: "short" },
 };
 const taFc = {};
 const taF = (kind) => {
@@ -3844,7 +3848,7 @@ async function taGet(sym, tf) {
 }
 // Draw the enabled overlays of one row on a candle series c of chart ch. barTimes = the chart times of the bars on screen
 // (ascending); key maps an overlay's epoch-second t to a chart time. daily = true: the old daily chart keeps its own
-// level lines and pattern marks, so the row's Levels and Patterns are not drawn twice.
+// level lines, so the row's own Levels are not drawn twice (its nearest daily support and resistance are).
 function taDraw(c, ch, row, barTimes, daily, key) {
   (c._ovLines || []).forEach((l) => {
     try {
@@ -3893,10 +3897,10 @@ function taDraw(c, ch, row, barTimes, daily, key) {
       });
   };
   // a zone is a box: its top and bottom as two thin lines from the zone's bar to the last bar, no labels
-  const zone = (g, color) => {
-    const k0 = key(g.t),
+  const zone = (g, color, alpha, start) => {
+    const k0 = start !== undefined ? start : key(g.t),
       from = barTimes.find((t) => !(t < k0)),
-      col = /^#[0-9a-f]{6}$/i.test(color) ? color + "99" : color;
+      col = /^#[0-9a-f]{6}$/i.test(color) ? color + (alpha || "99") : color;
     if (from === undefined || !(Number(g.top) > 0) || !(Number(g.bottom) > 0))
       return;
     try {
@@ -3907,6 +3911,7 @@ function taDraw(c, ch, row, barTimes, daily, key) {
           lastValueVisible: false,
           priceLineVisible: false,
           crosshairMarkerVisible: false,
+          autoscaleInfoProvider: () => null,
         });
         s.setData(
           from === last
@@ -3931,6 +3936,15 @@ function taDraw(c, ch, row, barTimes, daily, key) {
           2,
         ),
       );
+    if (daily) {
+      const rd = o.read || {};
+      [
+        [rd.nearest_support, up, " S"],
+        [rd.nearest_resistance, dn, " R"],
+      ].forEach(([x, col, sfx]) => {
+        if (x && x.tf) line(x.price, col, taTfName(x.tf) + sfx, 2, 1);
+      });
+    }
     list("htf_levels").forEach((l) =>
       line(
         l.price,
@@ -3967,16 +3981,22 @@ function taDraw(c, ch, row, barTimes, daily, key) {
         "Flip",
       ),
     );
-  if (on("patterns") && !daily)
-    list("patterns").forEach((x) =>
+  if (on("patterns")) {
+    const ps = list("patterns")
+      .filter((x) => has.has(key(x.t)))
+      .sort((a, b) => a.t - b.t);
+    ps.forEach((x, i) => {
+      const neutral = x.side === "neutral",
+        bull = x.side === "bull";
       mark(
         x.t,
-        x.side === "bull" ? "belowBar" : "aboveBar",
-        "#4da3ff",
-        x.side === "bull" ? "arrowUp" : "arrowDown",
-        x.name,
-      ),
-    );
+        neutral || !bull ? "aboveBar" : "belowBar",
+        neutral ? cssVar("--muted", "#8a97a6") : "#4da3ff",
+        neutral ? "circle" : bull ? "arrowUp" : "arrowDown",
+        i >= ps.length - 3 ? x.name : "",
+      );
+    });
+  }
   if (on("entries")) {
     const es = list("entries");
     es.forEach((x) =>
@@ -3988,10 +4008,18 @@ function taDraw(c, ch, row, barTimes, daily, key) {
         "Entry",
       ),
     );
-    if (es.length) {
-      const e = es.reduce((a, b) => (b.t > a.t ? b : a));
-      line(e.stop, dn, "Stop", 2);
-      line(e.target, up, "Target", 2);
+    const su = o.read && o.read.setup;
+    if (su && su.side) {
+      const z = (Array.isArray(su.zone) ? su.zone : []).map(Number);
+      if (z.length === 2)
+        zone(
+          { top: Math.max(z[0], z[1]), bottom: Math.min(z[0], z[1]) },
+          "#4da3ff",
+          "55",
+          barTimes[Math.max(0, barTimes.length - 20)],
+        );
+      line(su.stop, dn, "Stop", 2);
+      line(su.target, up, "Target", 2);
     }
   }
   c._ovMarks.sort(taCmp);
@@ -4010,7 +4038,12 @@ function taLegend(row, note) {
     .join("");
   const when =
     row && row.updated_at
-      ? taF("hms").format(new Date(row.updated_at)) + " " + taZone()
+      ? (taF("ymd").format(new Date(row.updated_at)) !== taF("ymd").format(new Date())
+          ? taF("wdm").format(new Date(row.updated_at)).replace(",", "") + " "
+          : "") +
+        taF("hms").format(new Date(row.updated_at)) +
+        " " +
+        taZone()
       : "unknown";
   const trend = ["up", "down", "none"].includes(o.trend) ? o.trend : "none";
   return (
@@ -4023,7 +4056,7 @@ function taLegend(row, note) {
 function taRead(row, sym) {
   const r = row && row.overlays && row.overlays.read;
   if (!r || typeof r !== "object") return "";
-  const d = taDec(sym),
+  const d = taDec(sym) + (taIsFx(sym) ? 1 : 0),
     px = (v) => esc(fmt(v, d)),
     lv = (x) =>
       x && x.price != null
@@ -4092,7 +4125,7 @@ async function taDaily(id, sym, c, bars, seq) {
     taKey(sym, "1d"),
   );
   const el = $(id + "-ta");
-  if (el) el.innerHTML = taLegend(row, "");
+  if (el) el.innerHTML = taLegend(row, TA_DAILY_NOTE);
   const rd = $(id + "-read");
   if (rd) rd.innerHTML = taRead(row, sym);
 }
