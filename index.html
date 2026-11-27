@@ -1378,6 +1378,7 @@ function sgxDetail(d) {
     <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
     <div class="chips" id="sgx-chart-draw" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-draw-n"></div>
+    <div id="sgx-chart-tk"></div>
     </div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
@@ -2385,6 +2386,7 @@ async function holdRead() {
       : !holdRow ? `<div class="empty">No holdings data yet. Check the passcode, and that the laptop is on.</div>` : holdRender(holdRow);
   }
   if (h !== holdHtml) { holdHtml = h; box.innerHTML = h; }
+  taTradeRefresh();
 }
 function holdRender(row) {
   const d = row.data || {}, P = (d.positions || []).map(holdCalc), base = holdCur(d.currency);
@@ -2647,6 +2649,7 @@ const ORD_ST = { queued: ["Waiting for laptop", ""], sending: ["Sending", ""], w
 async function loadOrders() {
   const { data, error } = await sb.from("tb_tiger_orders").select("*").order("id", { ascending: false }).limit(10);
   if (error) { $("ord-list").innerHTML = `<div class="empty">Could not load orders.</div>`; return; }
+  ordRows = data || []; taTradeRefresh();
   $("ord-list").innerHTML = (data || []).map(o => {
     const [lab, c] = ORD_ST[o.status] || [o.status, ""];
     const cur = o.currency === "USD" ? "US$" : "S$";
@@ -3920,6 +3923,8 @@ const TA_DRAW_MAX = 30,
     line: "Tap the chart to place the line.",
     trend: "Tap the chart for the start of the trend line.",
     box: "Tap the chart for the first corner of the box.",
+    buy: "Tap the chart at the price you want to buy at.",
+    sell: "Tap the chart at the price you want to sell at.",
   };
 let taDrawMode = null,
   taDrawPend = null,
@@ -4090,6 +4095,9 @@ function taDrawRender(c) {
       }
     } catch (_) {}
   });
+  try {
+    taTradeRender(c);
+  } catch (_) {}
 }
 // barTimes = the chart times of the bars on screen (ascending)
 function taDrawInit(c, ch, sym, barTimes) {
@@ -4181,6 +4189,7 @@ function taDrawClick(c, p) {
     return;
   }
   if (!taFin(price)) return;
+  if (taDrawMode === "buy" || taDrawMode === "sell") return taTkOpen(x.sym, taDrawMode === "buy" ? "BUY" : "SELL", price);
   let t = x.epOf(p.time);
   if (!taFin(t) && x.ep.length && taFin(p.point.x)) {
     // a tap beside the bars (e.g. right of the last one) has no time: take the nearest bar
@@ -4275,6 +4284,9 @@ function taDrawUi(sym) {
     ]
       .map(([k, nm]) => chip(nm, `setTaDraw('${k}')`, taDrawMode === k))
       .join("") +
+    (taIsFx(sym)
+      ? ""
+      : chip("Buy here", "setTaDraw('buy')", taDrawMode === "buy") + chip("Sell here", "setTaDraw('sell')", taDrawMode === "sell")) +
     chip("Undo", "taDrawUndo()", false) +
     chip("Clear", "taDrawClear()", false);
   if (n)
@@ -4284,6 +4296,210 @@ function taDrawUi(sym) {
             ? "First point at " + fmt(taDrawPend.p, taDec(sym)) + "; tap the second point."
             : TA_DRAW_HINT[taDrawMode]) + " "
         : "") + "Drawings are saved on this device only.";
+}
+// ---- Buy or sell from the chart (practice account). Arming Buy here or Sell here and tapping the chart opens a ticket under
+// the chart. The ticket only fills the Order card's own fields and calls ordReview(): its passcode check, its PRACTICE ACCOUNT
+// confirm and its single tb_tiger_orders insert are the only way an order is queued. No stop or bracket order is sent.
+let taTk = null, // the open ticket: {sym, side, px, qty, plan: {stop, target, side} | null}
+  ordRows = []; // the last read of tb_tiger_orders (loadOrders), for working-order lines
+const TA_TK_WORKING = ["queued", "sending", "working", "partially filled"];
+// price tick: US 0.01; SGX 0.001 under S$0.20, 0.005 under S$1.00, else 0.01
+const taTkTick = (px, us) => (us || px >= 1 ? 0.01 : px < 0.2 ? 0.001 : 0.005);
+const taTkRound = (px, us) => {
+  const t = taTkTick(px, us);
+  return Math.round(Math.round(px / t) * t * 1000) / 1000;
+};
+const taTkDec = (px, us) => (taTkTick(px, us) < 0.01 ? 3 : 2);
+const taHoldOf = (sym) => {
+  const P = (holdRow && holdRow.data && holdRow.data.positions) || [];
+  return P.filter((p) => p && p.kind === "STK" && p.symbol && (p.symbol === sym || shortSym(String(p.symbol)) === shortSym(sym)));
+};
+// whole shares of this stock in the practice account (0 when the holdings are not loaded)
+const taHeld = (sym) => taHoldOf(sym).reduce((a, p) => a + (Number(p.qty) || 0), 0);
+// the TA read's setup, only when it has a side, a zone, a stop and a target
+function taPlan(c) {
+  const su = c && c._row && c._row.overlays && c._row.overlays.read && c._row.overlays.read.setup;
+  if (!su || !su.side || su.stop == null || su.target == null) return null;
+  const z = (Array.isArray(su.zone) ? su.zone : []).map(Number),
+    stop = Number(su.stop),
+    target = Number(su.target);
+  if (z.length !== 2 || !z.every(taFin) || !taFin(stop) || !taFin(target)) return null;
+  return { long: taLong(su.side), mid: (z[0] + z[1]) / 2, stop, target };
+}
+function taTradeRender(c) {
+  const x = c && c._dr;
+  if (!x) return;
+  (c._trLines || []).forEach((l) => {
+    try {
+      c.removePriceLine(l);
+    } catch (_) {}
+  });
+  c._trLines = [];
+  if (x.fx || taIsFx(x.sym)) return;
+  const us = !x.sym.endsWith(".SI"),
+    up = cssVar("--up", "#23c47a"),
+    dn = cssVar("--down", "#ff5c5c"),
+    add = (price, color, title, style) => {
+      if (!taFin(price) || !(price > 0)) return;
+      try {
+        c._trLines.push(
+          c.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title }),
+        );
+      } catch (_) {}
+    },
+    f = (v) => fmt(v, taTkDec(v, us));
+  if (taTk && taTk.sym === x.sym) {
+    add(taTk.px, taTk.side === "BUY" ? up : dn, (taTk.side === "BUY" ? "Buy " : "Sell ") + f(taTk.px), 2);
+    if (taTk.plan) {
+      add(taTk.plan.stop, dn, "Stop " + f(taTk.plan.stop), 2);
+      add(taTk.plan.target, up, "Target " + f(taTk.plan.target), 2);
+    }
+  }
+  ordRows
+    .filter((o) => o && o.symbol === x.sym && !o.strategy && TA_TK_WORKING.includes(o.status))
+    .forEach((o) => {
+      const buy = o.side === "BUY";
+      add(Number(o.limit_price), buy ? up : dn, (buy ? "Buy " : "Sell ") + o.qty + " @ " + f(Number(o.limit_price)), 0);
+    });
+  taHoldOf(x.sym)
+    .filter((p) => Number(p.qty) > 0)
+    .forEach((p) => add(Number(p.avg_cost), "#8a97a6", "Avg cost " + f(Number(p.avg_cost)), 1));
+}
+function taTradeRefresh() {
+  try {
+    taTradeRender(chartC["sgx-chart"]);
+  } catch (_) {}
+}
+function taTkClose(noFit) {
+  taTk = null;
+  const el = $("sgx-chart-tk");
+  if (el) el.innerHTML = "";
+  taTradeRefresh();
+  if (!noFit) taFsFit();
+}
+function taTkOpen(sym, side, price) {
+  const d = ordData();
+  if (taIsFx(sym) || sym !== sgxSel || !d) {
+    toast("Open the stock in Research and let it finish loading first");
+    return;
+  }
+  const us = !sym.endsWith(".SI"),
+    held = taHeld(sym),
+    lot = us ? 10 : 100;
+  taDrawMode = null;
+  taDrawPend = null;
+  taTk = {
+    sym,
+    side,
+    px: taTkRound(price, us),
+    qty: side === "SELL" && held > 0 ? Math.max(1, Math.min(lot, Math.floor(held))) : lot,
+    plan: null,
+  };
+  taDrawUi(sym);
+  taTkUi();
+  taTradeRefresh();
+}
+function taTkSync() {
+  if (!taTk) return;
+  const px = parseFloat(($("tk-px") || {}).value),
+    q = parseInt(($("tk-qty") || {}).value, 10);
+  if (px > 0) taTk.px = px;
+  if (q > 0) taTk.qty = q;
+}
+function taTkEst() {
+  const el = $("tk-est"),
+    d = ordData();
+  if (!el || !taTk || !d) return;
+  const q = parseInt(($("tk-qty") || {}).value, 10),
+    px = parseFloat(($("tk-px") || {}).value);
+  if (!(q > 0) || !(px > 0)) {
+    el.textContent = "";
+    return;
+  }
+  const us = !taTk.sym.endsWith(".SI"),
+    cur = d.currency === "USD" ? "US$" : "S$",
+    v = q * px,
+    fee = ordFees(v, q, us);
+  el.innerHTML = `${taTk.side === "BUY" ? "Cost" : "Proceeds"} about <b>${esc(cur)}${esc(fmt(v, 2))}</b> + fees about ${esc(cur)}${esc(fmt(fee, 2))} (${esc((fee / v * 100).toFixed(2))}%)`;
+}
+// typing in the ticket: the price line follows; the ticket itself is not redrawn (the keyboard stays up)
+function taTkIn() {
+  taTkSync();
+  taTkEst();
+  taTradeRefresh();
+}
+function taTkSide(sd) {
+  if (!taTk) return;
+  taTkSync();
+  taTk.side = sd;
+  if (taTk.plan && taTk.plan.side !== sd) taTk.plan = null;
+  taTkUi();
+  taTradeRefresh();
+}
+function taTkPlan() {
+  const plan = taTk && taPlan(chartC["sgx-chart"]);
+  if (!plan || (!plan.long && taHeld(taTk.sym) <= 0)) return;
+  taTkSync();
+  taTk.side = plan.long ? "BUY" : "SELL";
+  taTk.px = taTkRound(plan.mid, !taTk.sym.endsWith(".SI"));
+  taTk.plan = { stop: plan.stop, target: plan.target, side: taTk.side };
+  taTkUi();
+  taTradeRefresh();
+}
+function taTkUi() {
+  const el = $("sgx-chart-tk");
+  if (!el) return;
+  const t = taTk;
+  if (!t) {
+    el.innerHTML = "";
+    taFsFit();
+    return;
+  }
+  const us = !t.sym.endsWith(".SI"),
+    dec = taTkDec(t.px, us),
+    plan = taPlan(chartC["sgx-chart"]),
+    held = taHeld(t.sym),
+    chip = (label, fn, on) =>
+      `<div class="chip ${on ? "sel" : ""}" style="padding:3px 12px;font-size:13px" onclick="${fn}">${label}</div>`;
+  let planH = "";
+  if (plan)
+    planH =
+      plan.long || held > 0
+        ? `<div class="chips" style="margin-top:6px">${chip("Use the plan", "taTkPlan()", false)}</div>`
+        : `<div class="sub" style="margin-top:6px">Selling short is not possible in this account.</div>`;
+  if (t.plan)
+    planH +=
+      `<div class="sub" style="margin-top:6px">Plan: ${t.side === "BUY" ? "buy" : "sell"} near ${esc(fmt(t.px, dec))}. Stop ${esc(fmt(t.plan.stop, dec))}, target ${esc(fmt(t.plan.target, dec))}.</div>` +
+      `<div class="sub" style="margin-top:4px">Tiger orders here are limit orders for today only, with no automatic stop. Watch the stop yourself or set a price alert.</div>`;
+  el.innerHTML = `<div style="margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:10px">
+    <div class="chips" style="align-items:center"><b style="font-size:13px">Order ticket</b><span class="sub">practice account</span>${chip("Buy", "taTkSide('BUY')", t.side === "BUY")}${chip("Sell", "taTkSide('SELL')", t.side === "SELL")}</div>
+    <div class="ord-f">
+      <div><label for="tk-px">Limit price</label><input type="number" id="tk-px" min="0" step="${taTkTick(t.px, us)}" inputmode="decimal" value="${esc(t.px.toFixed(dec))}" oninput="taTkIn()"></div>
+      <div><label for="tk-qty">Shares</label><input type="number" id="tk-qty" min="1" step="1" inputmode="numeric" value="${esc(t.qty)}" oninput="taTkIn()"></div>
+    </div>
+    ${us ? "" : `<div class="sub" style="margin-top:4px">SGX trades in lots of 100.</div>`}
+    <div class="sub" id="tk-est" style="margin-top:6px"></div>
+    ${t.side === "SELL" && held <= 0 ? `<div class="sub warn" style="margin-top:4px">Tiger refuses a sale of shares the account does not hold.</div>` : ""}
+    ${planH}
+    <div class="chips" style="margin-top:8px"><button onclick="taTkReview()">Review order</button><button class="ghost" onclick="taTkClose()">Cancel</button></div>
+  </div>`;
+  taTkEst();
+  taFsFit();
+}
+// the one way out: the Order card's own fields, then ordReview() (passcode, PRACTICE ACCOUNT confirm, insert)
+function taTkReview() {
+  if (!taTk) return;
+  taTkSync();
+  const q = parseInt(($("tk-qty") || {}).value, 10),
+    px = parseFloat(($("tk-px") || {}).value);
+  if (taTk.sym !== sgxSel) return taTkClose();
+  if (!(q > 0)) return toast("Enter a whole number of shares");
+  if (!(px > 0)) return toast("Enter a limit price");
+  if (ordKind !== "stock") ordSetKind("stock");
+  ordSetSide(taTk.side);
+  $("ord-px").value = px;
+  $("ord-qty").value = q;
+  return ordReview();
 }
 // ---- Research chart view: a tall chart you can zoom and scroll, kept across rebuilds, full screen, and the candle readout.
 // Dragging sideways pans; a vertical drag over the chart still scrolls the page (vertTouchDrag off).
@@ -4508,6 +4724,7 @@ function taControls(sym) {
     taDrawSym = sym;
     taDrawMode = null;
     taDrawPend = null;
+    taTkClose(true);
   }
   if (sym.endsWith(".SI")) {
     tf.innerHTML = taNavChips();
@@ -4547,6 +4764,7 @@ function setTaTf(k) {
   taTf = k;
   taDrawMode = null;
   taDrawPend = null;
+  taTkClose();
   try {
     localStorage.setItem(taTfKey, k);
   } catch (_) {}
@@ -4600,6 +4818,7 @@ const taHtfShow = (cur, tf) => {
   return i < 0 || j < 0 ? true : j > i && (j <= i + 2 || tf === "1d");
 };
 function taDraw(c, ch, row, barTimes, daily, key) {
+  c._row = row;
   (c._ovLines || []).forEach((l) => {
     try {
       c.removePriceLine(l);
@@ -4782,6 +5001,9 @@ function taDraw(c, ch, row, barTimes, daily, key) {
         taCmp,
       ),
     );
+  } catch (_) {}
+  try {
+    taTradeRender(c);
   } catch (_) {}
 }
 function taLegend(row, note, ctx) {
