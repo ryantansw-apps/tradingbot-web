@@ -1684,14 +1684,15 @@ function chartMarks() {
   // no text on the lines (it would cover the newest candles): the legend under the chart names the colours
   const line = (price, color, style = 2) => c.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title: "" });
   const close = (x) => Math.abs(x.price / d.price - 1) <= 0.4;      // a level far off the screen is no use on the chart
-  c._lines = [...sup.slice(0, 2).filter(close).map(x => line(x.price, up)), ...res.slice(0, 2).filter(close).map(x => line(x.price, dn))];
+  const lvOn = taOv.includes("levels"), paOn = taOv.includes("patterns");   // the Levels and Patterns chips also hide these
+  c._lines = lvOn ? [...sup.slice(0, 2).filter(close).map(x => line(x.price, up)), ...res.slice(0, 2).filter(close).map(x => line(x.price, dn))] : [];
   const marks = [];
-  (t.patterns || []).filter(p => p.status === "forming" || p.status === "confirmed").forEach(p => {
+  (paOn ? t.patterns || [] : []).filter(p => p.status === "forming" || p.status === "confirmed").forEach(p => {
     if (p.status === "forming") c._lines.push(line(p.trigger, "#4da3ff", 1));
     (p.points || []).forEach(([time, , text]) => { if (time >= c._first) marks.push({ time, position: p.bias === "+" ? "belowBar" : "aboveBar", color: "#4da3ff", shape: p.bias === "+" ? "arrowUp" : "arrowDown", text }); });
   });
-  c._baseMarks = marks;
-  try { c.setMarkers(marks.concat(c._ovMarks || []).sort((x, y) => x.time < y.time ? -1 : 1)); } catch (_) {}
+  marks.sort(taCmp); c._baseMarks = marks;
+  try { c.setMarkers(marks.concat(c._ovMarks || []).sort(taCmp)); } catch (_) {}
   const leg = $("sgx-chart-leg");
   if (leg && !leg.querySelector(".lv-leg")) leg.insertAdjacentHTML("beforeend", `<span class="lv-leg"><br><i style="background:${up}"></i>support<i style="background:${dn}"></i>resistance${marks.length ? ` · <span style="color:#4da3ff">▲▼</span> pattern points, blue line = the price that confirms it` : ""}</span>`);
 }
@@ -1840,7 +1841,7 @@ function applyISec() {
   document.querySelectorAll("#sgx-detail [data-isec]").forEach(el => el.classList.toggle("isec-off", el.dataset.isec !== isecNow()));
   document.querySelectorAll("#sgx-itabs button").forEach(b => b.classList.toggle("on", b.dataset.ik === isecNow()));
 }
-function selSgx(sym) { sgxSel = sym; try { localStorage.setItem(sgxSelKey, sym); } catch (_) {} sgxCache.sig = ""; renderSgx(); ordStock(); }
+function selSgx(sym) { if (fxOn) setMkt(sym.endsWith(".SI") ? "SG" : "US"); sgxSel = sym; try { localStorage.setItem(sgxSelKey, sym); } catch (_) {} sgxCache.sig = ""; renderSgx(); ordStock(); }
 async function addSgx() {
   const sym = sgxCode($("sgx-input").value);
   if (!sym) return toast(mkt === "US" ? "Use a US ticker like AAPL" : "Use an SGX code like O39 or a name like OCBC");
@@ -3588,9 +3589,16 @@ const cssVar = (n, d) => getComputedStyle(document.documentElement).getPropertyV
 async function drawChart(id, sym) {
   const el = $(id); if (!el || !sym) return;
   if (typeof LightweightCharts === "undefined") { el.innerHTML = `<div class="empty">Chart library did not load.</div>`; return; }
-  if (id === "sgx-chart") { taControls(sym); if (taIsFx(sym) || (!sym.endsWith(".SI") && taTf !== "1d")) return drawIntraday(id, sym); }
+  const seq = id === "sgx-chart" ? (taSeq[id] = (taSeq[id] || 0) + 1) : 0;   // a newer draw (another chip) makes this one stale
+  const stale = () => id === "sgx-chart" && taSeq[id] !== seq;
+  if (id === "sgx-chart") {
+    taControls(sym);
+    if (taIsFx(sym) || (!sym.endsWith(".SI") && taTf !== "1d")) return drawIntraday(id, sym, seq);
+    for (const x of ["-ta", "-read"]) { const b = $(id + x); if (b) b.innerHTML = ""; }   // nothing from an intraday view under the daily chart
+  }
   let bars;
-  try { bars = await getBars(sym); } catch (_) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; return; }
+  try { bars = await getBars(sym); } catch (_) { if (!stale()) el.innerHTML = `<div class="empty">Could not load chart.</div>`; return; }
+  if (stale()) return;
   const live = sgxCache.res[sym]?.data;   // today's session so far, from the 5-minute price job
   if (bars.length && live && live.day && live.day_open && live.price) {
     const today = [live.day, live.day_open, Math.max(live.day_high, live.price), Math.min(live.day_low, live.price), live.price, live.day_volume || 0];
@@ -3629,7 +3637,7 @@ async function drawChart(id, sym) {
   const legEl = $(id + "-leg");
   if (legEl) legEl.innerHTML = `${esc(sym)} · close ${fmt(last[4], 2)} on ${esc(last[0])} · ${chartRng} change <b class="${cls(last[4] - first[4])}">${signed((last[4] / first[4] - 1) * 100, 1, true)}</b>` +
     `<br><i style="background:#4da3ff"></i>50-day avg<i style="background:#ffb84d"></i>200-day avg · bars at the bottom = volume`;
-  if (id === "sgx-chart") { chartMarks(); if (!sym.endsWith(".SI")) taDaily(id, sym, c, bars); }
+  if (id === "sgx-chart") { chartMarks(); if (!sym.endsWith(".SI")) taDaily(id, sym, c, bars, seq); }
 }
 function setChartRng(k) {
   chartRng = k; try { localStorage.setItem(rngKey, k); } catch (_) {}
@@ -3684,6 +3692,7 @@ const taTfKey = "tb_ta_tf",
 const taIsFx = (s) => /=X$/.test(String(s));
 const taDec = (s) => (s === "JPY=X" ? 2 : taIsFx(s) ? 4 : 2);
 const taTfName = (tf) => (tf === "1d" ? "1D" : String(tf));
+const taName = (s) => (FX_LIST.find((f) => f[0] === s) || [0, s])[1];
 let taTf = (() => {
   try {
     const v = localStorage.getItem(taTfKey);
@@ -3756,6 +3765,21 @@ const taTick = (t, type) => {
   ).format(d);
 };
 const taLong = (v) => /^(buy|long|bull|up)/i.test(String(v));
+const taCmp = (a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0); // valid for numbers and "YYYY-MM-DD" strings
+// Chart time of an epoch-second t. Intraday: t itself. Daily bars are drawn as dates: the New York date for stocks
+// (their 1d bars start at midnight New York) and the UTC date for currencies (their 1d bars start at 00:00 UTC).
+const taNYDate = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const taKey = (sym, tf) =>
+  tf !== "1d"
+    ? (t) => t
+    : taIsFx(sym)
+      ? (t) => (isFinite(t) ? new Date(t * 1000).toISOString().slice(0, 10) : t)
+      : (t) => (isFinite(t) ? taNYDate.format(new Date(t * 1000)) : t);
 function taControls(sym) {
   const tf = $("sgx-chart-tf"),
     ov = $("sgx-chart-ov");
@@ -3818,22 +3842,30 @@ async function taGet(sym, tf) {
   taCache[k] = { at: Date.now(), row };
   return row;
 }
-// Draw the enabled overlays of one row on a candle series; barTimes = the times of the bars on screen.
-// daily = true: the existing daily level lines and pattern marks stay, so Levels and Patterns are not drawn twice.
-function taDraw(c, row, barTimes, daily) {
+// Draw the enabled overlays of one row on a candle series c of chart ch. barTimes = the chart times of the bars on screen
+// (ascending); key maps an overlay's epoch-second t to a chart time. daily = true: the old daily chart keeps its own
+// level lines and pattern marks, so the row's Levels and Patterns are not drawn twice.
+function taDraw(c, ch, row, barTimes, daily, key) {
   (c._ovLines || []).forEach((l) => {
     try {
       c.removePriceLine(l);
     } catch (_) {}
   });
+  (c._ovSeries || []).forEach((s) => {
+    try {
+      ch.removeSeries(s);
+    } catch (_) {}
+  });
   c._ovLines = [];
+  c._ovSeries = [];
   c._ovMarks = [];
   const o = (row && row.overlays) || {},
     on = (k) => taOv.includes(k),
     up = cssVar("--up", "#23c47a"),
     dn = cssVar("--down", "#ff5c5c");
   const has = new Set(barTimes),
-    list = (k) => (Array.isArray(o[k]) ? o[k] : []);
+    list = (k) => (Array.isArray(o[k]) ? o[k] : []),
+    last = barTimes[barTimes.length - 1];
   const line = (price, color, title, style, w) => {
     if (!(Number(price) > 0)) return;
     try {
@@ -3849,7 +3881,8 @@ function taDraw(c, row, barTimes, daily) {
       );
     } catch (_) {}
   };
-  const mark = (time, position, color, shape, text) => {
+  const mark = (t, position, color, shape, text) => {
+    const time = key(t);
     if (has.has(time))
       c._ovMarks.push({
         time,
@@ -3858,6 +3891,34 @@ function taDraw(c, row, barTimes, daily) {
         shape,
         text: String(text || ""),
       });
+  };
+  // a zone is a box: its top and bottom as two thin lines from the zone's bar to the last bar, no labels
+  const zone = (g, color) => {
+    const k0 = key(g.t),
+      from = barTimes.find((t) => !(t < k0)),
+      col = /^#[0-9a-f]{6}$/i.test(color) ? color + "99" : color;
+    if (from === undefined || !(Number(g.top) > 0) || !(Number(g.bottom) > 0))
+      return;
+    try {
+      [g.top, g.bottom].forEach((p) => {
+        const s = ch.addLineSeries({
+          color: col,
+          lineWidth: 1,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        s.setData(
+          from === last
+            ? [{ time: from, value: Number(p) }]
+            : [
+                { time: from, value: Number(p) },
+                { time: last, value: Number(p) },
+              ],
+        );
+        c._ovSeries.push(s);
+      });
+    } catch (_) {}
   };
   if (on("levels")) {
     if (!daily)
@@ -3881,17 +3942,11 @@ function taDraw(c, row, barTimes, daily) {
     );
   }
   if (on("fvg"))
-    list("fvg").forEach((g) => {
-      const col = g.filled ? "#7a8594" : g.side === "bull" ? up : dn;
-      line(g.top, col, "FVG", 2);
-      line(g.bottom, col, "FVG", 2);
-    });
+    list("fvg")
+      .filter((g) => !g.filled)
+      .forEach((g) => zone(g, g.side === "bull" ? up : dn));
   if (on("order_blocks"))
-    list("order_blocks").forEach((g) => {
-      const col = g.side === "bull" ? "#4da3ff" : "#ffb84d";
-      line(g.top, col, "OB", 2);
-      line(g.bottom, col, "OB", 2);
-    });
+    list("order_blocks").forEach((g) => zone(g, g.side === "bull" ? up : dn));
   if (on("choch"))
     list("choch").forEach((x) =>
       mark(
@@ -3939,11 +3994,11 @@ function taDraw(c, row, barTimes, daily) {
       line(e.target, up, "Target", 2);
     }
   }
-  c._ovMarks.sort((a, b) => a.time - b.time);
+  c._ovMarks.sort(taCmp);
   try {
     c.setMarkers(
       (daily ? (c._baseMarks || []).concat(c._ovMarks) : c._ovMarks).sort(
-        (a, b) => a.time - b.time,
+        taCmp,
       ),
     );
   } catch (_) {}
@@ -4009,7 +4064,7 @@ function taRead(row, sym) {
         ? ` (${esc(taTfName(far.tf))} ${long ? "resistance" : "support"})`
         : "";
     rows.push(
-      `<b>${long ? "Long" : "Short"} setup:</b> wait for price in ${px(z[0])} to ${px(z[1])}${ztf}; enter after a candle closes ${long ? "above the previous candle's high" : "below the previous candle's low"}; stop ${px(s.stop)}; target ${px(s.target)}${ttf}; reward to risk ${s.rr != null ? esc(fmt(s.rr, 1)) : "n/a"}`,
+      `<b>${long ? "Long" : "Short"} setup:</b> wait for price in ${px(z[0])} to ${px(z[1])}${ztf}; ${s.trigger ? esc(s.trigger) + "; " : ""}stop ${px(s.stop)}; target ${px(s.target)}${ttf}; reward to risk ${s.rr != null ? esc(fmt(s.rr, 1)) : "n/a"}`,
     );
   } else if (s && s.wait) rows.push(`<b>No setup now:</b> ${esc(s.wait)}`);
   return (
@@ -4018,44 +4073,67 @@ function taRead(row, sym) {
   );
 }
 // 1d on a US stock: the daily chart stays as it was; overlays from a tf "1d" row are added when one exists
-async function taDaily(id, sym, c, bars) {
+async function taDaily(id, sym, c, bars, seq) {
   const row = await taGet(sym, "1d");
-  if (!row || chartC[id] !== c || c._sym !== sym) return;
+  if (
+    !row ||
+    taSeq[id] !== seq ||
+    chartC[id] !== c ||
+    c._sym !== sym ||
+    !charts[id]
+  )
+    return;
   taDraw(
     c,
+    charts[id],
     row,
     bars.map((b) => b[0]),
     true,
+    taKey(sym, "1d"),
   );
   const el = $(id + "-ta");
   if (el) el.innerHTML = taLegend(row, "");
   const rd = $(id + "-read");
   if (rd) rd.innerHTML = taRead(row, sym);
 }
-async function drawIntraday(id, sym) {
+async function drawIntraday(id, sym, seq) {
   const el = $(id);
   if (!el) return;
   const fx = taIsFx(sym),
-    seq = (taSeq[id] = (taSeq[id] || 0) + 1),
+    tf = taTf,
     taEl = () => $(id + "-ta"),
     rdEl = () => $(id + "-read");
   if (!el.querySelector("canvas"))
     el.innerHTML = `<div class="empty">Loading chart…</div>`;
-  const row = await taGet(sym, taTf);
+  const row = await taGet(sym, tf);
   if ($(id) !== el || taSeq[id] !== seq) return;
   const rngEl = $(id + "-rng");
   if (rngEl) rngEl.innerHTML = "";
   const legEl = $(id + "-leg");
-  const bars =
+  const key = taKey(sym, tf),
+    fin = (v) => typeof v === "number" && isFinite(v);
+  const raw =
     row && Array.isArray(row.bars)
-      ? row.bars.filter((b) => Array.isArray(b) && b.length >= 5)
+      ? row.bars
+          .filter(
+            (b) => Array.isArray(b) && [0, 1, 2, 3, 4].every((i) => fin(b[i])),
+          )
+          .sort((a, b) => a[0] - b[0])
       : [];
+  const bars = []; // one bar per chart time (a daily chart needs one per date); the later one wins
+  raw.forEach((b) => {
+    const k = key(b[0]);
+    if (bars.length && bars[bars.length - 1].k === k)
+      bars[bars.length - 1] = { k, b };
+    else bars.push({ k, b });
+  });
   if (charts[id]) {
     try {
       charts[id].remove();
     } catch (_) {}
     delete charts[id];
   }
+  delete chartC[id];
   if (!bars.length) {
     el.innerHTML = `<div class="empty">${esc(fx ? TA_EMPTY_FX : TA_EMPTY)}</div>`;
     if (legEl) legEl.innerHTML = "";
@@ -4068,7 +4146,8 @@ async function drawIntraday(id, sym) {
     dn = cssVar("--down", "#ff5c5c"),
     txt = cssVar("--muted", "#8a97a6"),
     line = cssVar("--line", "#2a3140");
-  const dec = taDec(sym);
+  const dec = taDec(sym),
+    daily = tf === "1d";
   const ch = LightweightCharts.createChart(el, {
     width: el.clientWidth || 340,
     height: el.clientHeight || 260,
@@ -4079,15 +4158,21 @@ async function drawIntraday(id, sym) {
     },
     grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
     rightPriceScale: { borderVisible: false },
-    timeScale: {
-      borderVisible: false,
-      timeVisible: true,
-      secondsVisible: false,
-      tickMarkFormatter: taTick,
-    },
-    localization: {
-      timeFormatter: (t) => taF("full").format(new Date(t * 1000)),
-    },
+    timeScale: daily
+      ? { borderVisible: false }
+      : {
+          borderVisible: false,
+          timeVisible: true,
+          secondsVisible: false,
+          tickMarkFormatter: taTick,
+        },
+    ...(daily
+      ? {}
+      : {
+          localization: {
+            timeFormatter: (t) => taF("full").format(new Date(t * 1000)),
+          },
+        }),
     crosshair: { mode: 0 },
     handleScroll: false,
     handleScale: false,
@@ -4103,8 +4188,8 @@ async function drawIntraday(id, sym) {
     priceFormat: { type: "price", precision: dec, minMove: Math.pow(10, -dec) },
   });
   c.setData(
-    bars.map((b) => ({
-      time: b[0],
+    bars.map(({ k, b }) => ({
+      time: k,
       open: b[1],
       high: b[2],
       low: b[3],
@@ -4112,7 +4197,7 @@ async function drawIntraday(id, sym) {
     })),
   );
   c._sym = sym;
-  c._first = bars[0][0];
+  c._first = bars[0].k;
   c._intra = true;
   chartC[id] = c;
   if (!fx) {
@@ -4124,26 +4209,28 @@ async function drawIntraday(id, sym) {
     });
     ch.priceScale("").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     vol.setData(
-      bars.map((b) => ({
-        time: b[0],
-        value: b[5] || 0,
+      bars.map(({ k, b }) => ({
+        time: k,
+        value: Number(b[5]) || 0,
         color: b[4] >= b[1] ? up + "55" : dn + "55",
       })),
     );
   }
   taDraw(
     c,
+    ch,
     row,
-    bars.map((b) => b[0]),
+    bars.map((x) => x.k),
     false,
+    key,
   );
   ch.timeScale().setVisibleLogicalRange({
-    from: Math.max(0, bars.length - 80),
+    from: Math.max(0, bars.length - (daily ? 130 : 80)),
     to: bars.length - 1,
   });
-  const last = bars[bars.length - 1];
+  const last = bars[bars.length - 1].b;
   if (legEl)
-    legEl.innerHTML = `${esc(sym)} · ${esc(taTf)} · last ${fmt(last[4], dec)} · times in ${taTz === "Asia/Singapore" ? "Singapore time (SGT)" : "New York time (ET)"}`;
+    legEl.innerHTML = `${esc(taName(sym))} · ${esc(tf)} · last ${fmt(last[4], dec)} · ${daily ? "daily bars" : "times in " + (taTz === "Asia/Singapore" ? "Singapore time (SGT)" : "New York time (ET)")}`;
   if (taEl()) taEl().innerHTML = taLegend(row, fx ? TA_FEED_FX : TA_FEED);
   if (rdEl()) rdEl().innerHTML = taRead(row, sym);
 }
@@ -4159,8 +4246,7 @@ function renderFx() {
   const det = $("sgx-detail");
   if (det.dataset.fx === fxSel && $("sgx-chart")) return;
   det.dataset.fx = fxSel;
-  const name = (FX_LIST.find((f) => f[0] === fxSel) || [0, fxSel])[1];
-  det.innerHTML = `<div class="sgx-h"><div class="nm">${esc(name)} <span class="sub">${esc(fxSel)}</span></div></div>
+  det.innerHTML = `<div class="sgx-h"><div class="nm">${esc(taName(fxSel))} <span class="sub">${esc(fxSel)}</span></div></div>
     <div class="chips" id="sgx-chart-tf" style="margin-top:8px"></div>
     <div class="chips" id="sgx-chart-ov" style="margin-top:4px"></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
