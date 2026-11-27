@@ -4248,7 +4248,9 @@ let taFs = false, // full screen open
 // the main chart's height in normal view; in full screen the box fills what the controls leave
 const taLand = () => window.innerWidth > window.innerHeight;
 const taSubH = () => (taFs && taLand() ? 70 : 110);
-let taLayers = true; // full screen: the overlay, indicator and Draw rows are shown
+let taLayers = true, // full screen: the overlay, indicator and Draw rows are shown
+  taLayersUser = false, // the reader tapped Layers since the last turn of the phone
+  taFsLand = false; // orientation seen by the last fit
 function taSizeMain() {
   const el = $("sgx-chart");
   if (!taFs && el && el.style) el.style.height = taMainH() + "px";
@@ -4257,6 +4259,14 @@ function taSizeMain() {
 // Full screen: the main chart gets what is left of the visible viewport after every other row (measured), at least 160 px.
 // Out of full screen it only puts the rows and small charts back to normal.
 function taFsFit() {
+  if (taFs && taLand() !== taFsLand) {
+    // the phone turned: sideways folds the rows away, upright shows them, unless the reader chose since the last turn
+    taFsLand = taLand();
+    if (!taLayersUser) taLayers = !taFsLand;
+    taLayersUser = false;
+    const sy = taSym();
+    if (sy) return taControls(sy); // redraws the chips, then fits again
+  }
   const hide = taFs && !taLayers ? "none" : "";
   ["sgx-chart-ov", "sgx-chart-ind", "sgx-chart-draw", "sgx-chart-draw-n"].forEach((id) => {
     const e = $(id);
@@ -4297,6 +4307,7 @@ function taFsFit() {
 }
 function taLayersToggle() {
   taLayers = !taLayers;
+  taLayersUser = true;
   const s = taSym();
   if (s) taControls(s);
 }
@@ -4359,7 +4370,9 @@ function taFsOpen() {
   document.body.style.overflow = "hidden";
   document.documentElement.style.overflow = "hidden";
   taFs = true;
-  taLayers = !taLand(); // wider than tall: the extra rows start folded away
+  taFsLand = taLand();
+  taLayers = !taFsLand; // wider than tall: the extra rows start folded away
+  taLayersUser = false;
   try {
     history.pushState({ taFs: 1 }, "");
     taFsPush = true;
