@@ -3645,12 +3645,12 @@ async function drawChart(id, sym) {
     `<br><i style="background:#4da3ff"></i>50-day avg<i style="background:#ffb84d"></i>200-day avg · bars at the bottom = volume`;
   if (id === "sgx-chart") {
     chartMarks();
+    taDrawInit(c, ch, sym, bars.map((b) => b[0]));
     if (!sym.endsWith(".SI")) {
       // indicators from the daily bars this chart already has; its own 50 and 200-day lines are not drawn twice
       taIndDraw(ch, bars.map(b => ({ time: b[0], t: null, h: b[2], l: b[3], c: b[4], v: b[5] })),
         { fx: false, tf: "1d", daily: true, dec: 2, range: { from: Math.max(0, bars.length - n), to: bars.length - 1 }, up, dn, txt, line });
       const taE = $(id + "-ta"); if (taE) taE.innerHTML = taIndLegend({ fx: false, tf: "1d" });
-      taDrawInit(c, ch, sym, bars.map((b) => b[0]));
       taDaily(id, sym, c, bars, seq);
     }
   }
@@ -3852,7 +3852,7 @@ function taDrawLoad(sym) {
     if (!Array.isArray(raw)) return [];
     return raw
       .filter(taDrawOk)
-      .slice(0, TA_DRAW_MAX)
+      .slice(-TA_DRAW_MAX)
       .map((d) =>
         d.type === "line"
           ? { type: d.type, a: { t: d.a.t, p: d.a.p } }
@@ -3880,8 +3880,15 @@ const taEpoch = (v) => {
     return Date.UTC(v.year, v.month - 1, v.day) / 1000;
   return NaN;
 };
-// Draw every saved drawing of the chart's symbol on candle series c. Trend: a ray from the first bar at or after a.t to the
-// last bar, valued by linear interpolation in time. Box: top and bottom lines over the bars between its two corners.
+// index of the bar containing epoch t (the last bar contains everything after its start), -1 when t is before the series
+const taAnchor = (ep, t) => {
+  let r = -1;
+  for (let i = 0; i < ep.length && ep[i] <= t; i++) r = i;
+  return r;
+};
+// Draw every saved drawing of the chart's symbol on candle series c. Trend: a ray from the bar containing the earlier point to
+// the last bar, straight on screen (linear in bar index) when both points sit on different bars of this series, else linear in
+// clock time. Box: top and bottom lines over the bars whose span touches the box's time range.
 function taDrawRender(c) {
   const x = c && c._dr;
   if (!x) return;
@@ -3907,6 +3914,7 @@ function taDrawRender(c) {
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
+        pointMarkersVisible: pts.length === 1,
         autoscaleInfoProvider: () => null,
       });
       s.setData(pts);
@@ -3927,19 +3935,32 @@ function taDrawRender(c) {
           }),
         );
       } else if (d.type === "trend") {
-        const slope = (d.b.p - d.a.p) / (d.b.t - d.a.t),
+        const [p, q] = d.a.t <= d.b.t ? [d.a, d.b] : [d.b, d.a],
+          ia = taAnchor(x.ep, p.t),
+          ib = taAnchor(x.ep, q.t),
           pts = [];
-        x.bt.forEach((tm, i) => {
-          if (x.ep[i] >= d.a.t)
-            pts.push({ time: tm, value: d.a.p + slope * (x.ep[i] - d.a.t) });
-        });
+        if (ia >= 0 && ib >= 0 && ia !== ib) {
+          const step = (q.p - p.p) / (ib - ia);
+          for (let i = ia; i < x.bt.length; i++)
+            pts.push({ time: x.bt[i], value: p.p + step * (i - ia) });
+        } else {
+          const slope = (q.p - p.p) / (q.t - p.t);
+          for (let i = Math.max(ia, 0); i < x.bt.length; i++)
+            pts.push({ time: x.bt[i], value: p.p + slope * (x.ep[i] - p.t) });
+        }
         add(pts);
       } else {
         const lo = Math.min(d.a.t, d.b.t),
           hi = Math.max(d.a.t, d.b.t),
           top = Math.max(d.a.p, d.b.p),
           bot = Math.min(d.a.p, d.b.p),
-          ts = x.bt.filter((_, i) => x.ep[i] >= lo && x.ep[i] <= hi);
+          n = x.ep.length,
+          ts = [];
+        for (let i = 0; i < n; i++) {
+          const end =
+            i + 1 < n ? x.ep[i + 1] : x.ep[i] + (n > 1 ? x.ep[i] - x.ep[i - 1] : 86400);
+          if (x.ep[i] <= hi && end > lo) ts.push(x.bt[i]);
+        }
         add(ts.map((tm) => ({ time: tm, value: top })));
         add(ts.map((tm) => ({ time: tm, value: bot })));
       }
@@ -3965,6 +3986,13 @@ function taDrawClick(c, p) {
   }
   if (!taFin(price)) return;
   let t = taEpoch(p.time);
+  if (!taFin(t) && x.ep.length && taFin(p.point.x)) {
+    // a tap beside the bars (e.g. right of the last one) has no time: take the nearest bar
+    try {
+      const lg = x.ch.timeScale().coordinateToLogical(p.point.x);
+      if (taFin(lg)) t = x.ep[Math.min(x.ep.length - 1, Math.max(0, Math.round(lg)))];
+    } catch (_) {}
+  }
   if (!taFin(t)) {
     if (taDrawMode !== "line") return;
     t = Math.floor(Date.now() / 1000);
@@ -3977,7 +4005,8 @@ function taDrawClick(c, p) {
     return;
   }
   if (pt.t === taDrawPend.t) return; // the same bar twice has no width
-  taDrawAdd(x.sym, { type: taDrawMode, a: taDrawPend, b: pt });
+  const [e, l] = pt.t < taDrawPend.t ? [pt, taDrawPend] : [taDrawPend, pt]; // the earlier point is a
+  taDrawAdd(x.sym, { type: taDrawMode, a: e, b: l });
 }
 function taDrawAdd(sym, d) {
   const list = taDrawLoad(sym);
@@ -4021,7 +4050,7 @@ function taDrawUi(sym) {
   const el = $("sgx-chart-draw"),
     n = $("sgx-chart-draw-n");
   if (!el) return;
-  if (!sym || sym.endsWith(".SI")) {
+  if (!sym) {
     el.innerHTML = "";
     if (n) n.textContent = "";
     return;
@@ -4042,8 +4071,9 @@ function taDrawUi(sym) {
   if (n)
     n.textContent =
       (taDrawMode
-        ? (taDrawPend ? "Tap the second point." : TA_DRAW_HINT[taDrawMode]) +
-          " "
+        ? (taDrawPend
+            ? "First point at " + fmt(taDrawPend.p, taDec(sym)) + "; tap the second point."
+            : TA_DRAW_HINT[taDrawMode]) + " "
         : "") + "Drawings are saved on this device only.";
 }
 function taControls(sym) {
@@ -4090,6 +4120,8 @@ function taControls(sym) {
 }
 function setTaTf(k) {
   taTf = k;
+  taDrawMode = null;
+  taDrawPend = null;
   try {
     localStorage.setItem(taTfKey, k);
   } catch (_) {}
