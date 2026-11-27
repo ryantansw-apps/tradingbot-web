@@ -1343,7 +1343,10 @@ function sgxDetail(d) {
       <div class="sub">${d.price_at ? `price read ${esc(pxWhen(d.price_at))}${d.currency === "USD" ? "" : " (SGX about 10 min late)"} · ` : ""}${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${d.div_yield != null ? ` · <b>dividend yield ${fmt(d.div_yield, 2)}%</b>` : ""}${figH > 96 ? ` · <span class="warn">company figures ${ago(d.as_of)} old</span>` : ""}</div></div>
     <div class="chips" id="sgx-chart-tf" style="margin-top:8px"></div>
     <div class="chips" id="sgx-chart-ov" style="margin-top:4px"></div>
+    <div class="chips" id="sgx-chart-ind" style="margin-top:4px"></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
+    <div class="chartbox" id="sgx-chart-rsi" style="height:110px;display:none"></div>
+    <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
     <div class="sub chart-leg" id="sgx-chart-read"></div>
@@ -3610,13 +3613,14 @@ async function drawChart(id, sym) {
   if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; return; }
   const n = (RANGES.find(r => r[0] === chartRng) || RANGES[1])[1];
   if (charts[id]) { try { charts[id].remove(); } catch (_) {} }
+  if (id === "sgx-chart") taIndClear();
   el.innerHTML = "";
   const up = cssVar("--up", "#23c47a"), dn = cssVar("--down", "#ff5c5c"), txt = cssVar("--muted", "#8a97a6"), line = cssVar("--line", "#2a3140");
   const ch = LightweightCharts.createChart(el, {
     width: el.clientWidth || 340, height: el.clientHeight || 260,
     layout: { background: { color: "transparent" }, textColor: txt, fontSize: 11 },
     grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
-    rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false },
+    rightPriceScale: { borderVisible: false, ...(id === "sgx-chart" && !sym.endsWith(".SI") ? taPsw() : {}) }, timeScale: { borderVisible: false },
     crosshair: { mode: 0 }, handleScroll: false, handleScale: false,
   });
   charts[id] = ch; if (chartRO) chartRO.observe(el);
@@ -3637,7 +3641,16 @@ async function drawChart(id, sym) {
   const legEl = $(id + "-leg");
   if (legEl) legEl.innerHTML = `${esc(sym)} · close ${fmt(last[4], 2)} on ${esc(last[0])} · ${chartRng} change <b class="${cls(last[4] - first[4])}">${signed((last[4] / first[4] - 1) * 100, 1, true)}</b>` +
     `<br><i style="background:#4da3ff"></i>50-day avg<i style="background:#ffb84d"></i>200-day avg · bars at the bottom = volume`;
-  if (id === "sgx-chart") { chartMarks(); if (!sym.endsWith(".SI")) taDaily(id, sym, c, bars, seq); }
+  if (id === "sgx-chart") {
+    chartMarks();
+    if (!sym.endsWith(".SI")) {
+      // indicators from the daily bars this chart already has; its own 50 and 200-day lines are not drawn twice
+      taIndDraw(ch, bars.map(b => ({ time: b[0], t: null, h: b[2], l: b[3], c: b[4], v: b[5] })),
+        { fx: false, tf: "1d", daily: true, range: { from: Math.max(0, bars.length - n), to: bars.length - 1 }, up, dn, txt, line });
+      const taE = $(id + "-ta"); if (taE) taE.innerHTML = taIndLegend({ fx: false, tf: "1d" });
+      taDaily(id, sym, c, bars, seq);
+    }
+  }
 }
 function setChartRng(k) {
   chartRng = k; try { localStorage.setItem(rngKey, k); } catch (_) {}
@@ -3647,7 +3660,7 @@ function setChartRng(k) {
 // ---- Research chart: intraday timeframes, higher-timeframe levels, toggleable overlays and a textbook TA read
 // (table tb_chart_intraday, written by the laptop job). Every overlay carries the result of its own test.
 // US stocks get all timeframes; SGX stocks stay daily-only; the FX market (view only) is built on the same rows.
-const TA_TFS = ["5m", "15m", "1h", "4h", "1d"];
+const TA_TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"];
 const TA_OVS = [
   ["levels", "Levels"],
   ["fvg", "FVG"],
@@ -3668,6 +3681,22 @@ const TA_TESTED = {
   patterns: "Tested 31 Aug: none of 17 patterns predicted the next candle.",
   entries:
     "Tested 27 Nov: confirmation and sweep entries did not beat random entries before costs.",
+};
+const TA_INDS = [
+  ["ma", "MA", "Moving averages"],
+  ["ema", "EMA", "EMA 9/21"],
+  ["bb", "Bollinger", "Bollinger Bands"],
+  ["vwap", "VWAP", "VWAP"],
+  ["rsi", "RSI", "RSI"],
+  ["macd", "MACD", "MACD"],
+];
+const TA_IND_TESTED = {
+  ma: "Tested 26 Nov: the 50/200-day golden cross made 6.9% a year (worst fall -25.3%) against 10.7% for holding SPY; not distinguishable from luck.",
+  ema: "Not tested.",
+  bb: "Tested 26 Nov (daily, 20 ETFs, 2007 to 2026): 4.9% a year, worst fall -27.1%; failed the luck test.",
+  vwap: "Not tested.",
+  rsi: "Tested 26 Nov (daily, 20 ETFs, 2007 to 2026): RSI 30/70 made 5.2% a year, worst fall -42.9%; failed the luck test.",
+  macd: "Tested 26 Nov (daily, 20 ETFs, 2007 to 2026): 4.8% a year, worst fall -27.9%; failed the luck test.",
 };
 const TA_FEED =
   "Real-time prices from one exchange (IEX). Highs, lows and volume can differ slightly from the full market. Updates about every minute while the laptop is on.";
@@ -3693,7 +3722,7 @@ const taTfKey = "tb_ta_tf",
   fxSelKey = "tb_fx_sel";
 const taIsFx = (s) => /=X$/.test(String(s));
 const taDec = (s) => (s === "JPY=X" ? 2 : taIsFx(s) ? 4 : 2);
-const taTfName = (tf) => (tf === "1d" ? "1D" : String(tf));
+const taTfName = (tf) => (tf === "1d" ? "1D" : tf === "1w" ? "1W" : String(tf));
 const taName = (s) => (FX_LIST.find((f) => f[0] === s) || [0, s])[1];
 let taTf = (() => {
   try {
@@ -3710,6 +3739,15 @@ let taOv = (() => {
       return v.filter((k) => TA_OVS.some((o) => o[0] === k));
   } catch (_) {}
   return TA_OVS.map((o) => o[0]);
+})();
+// indicator switches: all off until chosen, then remembered on this device
+const taIndKey = "tb_ta_ind";
+let taInd = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(taIndKey));
+    if (Array.isArray(v)) return v.filter((k) => TA_INDS.some((o) => o[0] === k));
+  } catch (_) {}
+  return [];
 })();
 let taTz = (() => {
   try {
@@ -3770,7 +3808,7 @@ const taTick = (t, type) => {
 };
 const taLong = (v) => /^(buy|long|bull|up)/i.test(String(v));
 const taCmp = (a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0); // valid for numbers and "YYYY-MM-DD" strings
-// Chart time of an epoch-second t. Intraday: t itself. Daily bars are drawn as dates: the New York date for stocks
+// Chart time of an epoch-second t. Intraday: t itself. Daily and weekly bars are drawn as dates: the New York date for stocks
 // (their 1d bars start at midnight New York) and the UTC date for currencies (their 1d bars start at 00:00 UTC).
 const taNYDate = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/New_York",
@@ -3779,18 +3817,21 @@ const taNYDate = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 const taKey = (sym, tf) =>
-  tf !== "1d"
+  tf !== "1d" && tf !== "1w"
     ? (t) => t
     : taIsFx(sym)
       ? (t) => (isFinite(t) ? new Date(t * 1000).toISOString().slice(0, 10) : t)
       : (t) => (isFinite(t) ? taNYDate.format(new Date(t * 1000)) : t);
 function taControls(sym) {
   const tf = $("sgx-chart-tf"),
-    ov = $("sgx-chart-ov");
+    ov = $("sgx-chart-ov"),
+    ind = $("sgx-chart-ind");
   if (!tf || !ov) return;
   if (sym.endsWith(".SI")) {
     tf.innerHTML = "";
     ov.innerHTML = "";
+    if (ind) ind.innerHTML = "";
+    taIndClear();
     for (const s of ["-ta", "-read"]) {
       const t = $("sgx-chart" + s);
       if (t) t.innerHTML = "";
@@ -3807,6 +3848,14 @@ function taControls(sym) {
         `<div class="chip ${taOv.includes(k) ? "sel" : ""}" style="padding:3px 9px;font-size:12px" onclick="toggleTaOv('${k}')">${n}</div>`,
     ).join("") +
     `<div class="chip ${taTz === "America/New_York" ? "sel" : ""}" style="padding:3px 9px;font-size:12px" title="Show chart times in New York time" onclick="toggleTaTz()">ET</div>`;
+  if (ind)
+    ind.innerHTML =
+      `<div class="sub" style="align-self:center">Indicators:</div>` +
+      TA_INDS.map(([k, n]) =>
+        k === "vwap" && taIsFx(sym)
+          ? `<div class="chip" style="padding:3px 9px;font-size:12px;opacity:.55" title="Currencies have no volume">VWAP needs volume</div>`
+          : `<div class="chip ${taInd.includes(k) ? "sel" : ""}" style="padding:3px 9px;font-size:12px" onclick="toggleTaInd('${k}')">${n}</div>`,
+      ).join("");
 }
 function setTaTf(k) {
   taTf = k;
@@ -3819,6 +3868,13 @@ function toggleTaOv(k) {
   taOv = taOv.includes(k) ? taOv.filter((x) => x !== k) : taOv.concat([k]);
   try {
     localStorage.setItem(taOvKey, JSON.stringify(taOv));
+  } catch (_) {}
+  if (taSym()) drawChart("sgx-chart", taSym());
+}
+function toggleTaInd(k) {
+  taInd = taInd.includes(k) ? taInd.filter((x) => x !== k) : taInd.concat([k]);
+  try {
+    localStorage.setItem(taIndKey, JSON.stringify(taInd));
   } catch (_) {}
   if (taSym()) drawChart("sgx-chart", taSym());
 }
@@ -4032,7 +4088,7 @@ function taDraw(c, ch, row, barTimes, daily, key) {
     );
   } catch (_) {}
 }
-function taLegend(row, note) {
+function taLegend(row, note, ctx) {
   const o = (row && row.overlays) || {};
   const on = TA_OVS.filter(([k]) => taOv.includes(k))
     .map(([k, n]) => `<div><b>${n}:</b> ${esc(TA_TESTED[k])}</div>`)
@@ -4049,6 +4105,7 @@ function taLegend(row, note) {
   const trend = ["up", "down", "none"].includes(o.trend) ? o.trend : "none";
   return (
     on +
+    taIndLegend(ctx) +
     (note ? `<div style="margin-top:4px">${esc(note)}</div>` : "") +
     `<div style="margin-top:4px">Updated ${esc(when)} · Trend: ${esc(trend)}</div>`
   );
@@ -4078,7 +4135,7 @@ function taRead(row, sym) {
   const pat = r.last_pattern,
     ch = r.last_choch;
   rows.push(
-    `Last pattern: ${pat ? esc(typeof pat === "object" ? (pat.name || "") + (pat.side ? " (" + pat.side + ")" : "") : pat) : "none"}`,
+    `Last pattern: ${pat ? esc(typeof pat === "object" ? (pat.name || "") + (pat.side && !/\((bull|bear)\)$/.test(pat.name || "") ? " (" + pat.side + ")" : "") : pat) : "none"}`,
   );
   rows.push(
     `Last CHoCH: ${ch ? esc(typeof ch === "object" ? (ch.side || "") + (ch.price != null ? " at " + fmt(ch.price, d) : "") : ch) : "none"}`,
@@ -4130,6 +4187,323 @@ async function taDaily(id, sym, c, bars, seq) {
   const rd = $(id + "-read");
   if (rd) rd.innerHTML = taRead(row, sym);
 }
+// ---- Indicators: textbook formulas on the bars already on screen (nothing is fetched). Every function returns an
+// array as long as its input, null while it is still warming up.
+function taSma(v, n) {
+  const out = new Array(v.length).fill(null);
+  for (let i = n - 1; i < v.length; i++) {
+    let s = 0;
+    for (let j = i - n + 1; j <= i; j++) s += v[j];
+    out[i] = s / n;
+  }
+  return out;
+}
+// alpha 2/(n+1), seeded with the simple average of the first n values (leading nulls are skipped)
+function taEma(v, n) {
+  const out = new Array(v.length).fill(null),
+    a = 2 / (n + 1),
+    s0 = v.findIndex((x) => x != null);
+  if (s0 < 0 || v.length - s0 < n) return out;
+  let e = 0;
+  for (let i = s0; i < s0 + n; i++) e += v[i];
+  e /= n;
+  out[s0 + n - 1] = e;
+  for (let i = s0 + n; i < v.length; i++) {
+    e = a * v[i] + (1 - a) * e;
+    out[i] = e;
+  }
+  return out;
+}
+// middle = simple average of n closes; bands = middle +/- k population standard deviations
+function taBollinger(v, n, k) {
+  const mid = taSma(v, n),
+    up = new Array(v.length).fill(null),
+    lo = new Array(v.length).fill(null);
+  for (let i = n - 1; i < v.length; i++) {
+    let q = 0;
+    for (let j = i - n + 1; j <= i; j++) q += (v[j] - mid[i]) * (v[j] - mid[i]);
+    const sd = Math.sqrt(q / n);
+    up[i] = mid[i] + k * sd;
+    lo[i] = mid[i] - k * sd;
+  }
+  return { mid, up, lo };
+}
+// Wilder: first averages are simple means of the first n changes, then avg = (avg * (n - 1) + new) / n
+function taRsiWilder(v, n) {
+  const out = new Array(v.length).fill(null);
+  if (v.length <= n) return out;
+  let g = 0,
+    l = 0;
+  for (let i = 1; i <= n; i++) {
+    const d = v[i] - v[i - 1];
+    g += Math.max(d, 0);
+    l += Math.max(-d, 0);
+  }
+  g /= n;
+  l /= n;
+  const rsi = () => (l === 0 ? (g === 0 ? 50 : 100) : 100 - 100 / (1 + g / l));
+  out[n] = rsi();
+  for (let i = n + 1; i < v.length; i++) {
+    const d = v[i] - v[i - 1];
+    g = (g * (n - 1) + Math.max(d, 0)) / n;
+    l = (l * (n - 1) + Math.max(-d, 0)) / n;
+    out[i] = rsi();
+  }
+  return out;
+}
+// line = EMA(fast) - EMA(slow); signal = EMA of the line; hist = line - signal
+function taMacd(v, fast, slow, sig) {
+  const ef = taEma(v, fast),
+    es = taEma(v, slow),
+    line = v.map((_, i) =>
+      ef[i] != null && es[i] != null ? ef[i] - es[i] : null,
+    ),
+    signal = taEma(line, sig);
+  return {
+    line,
+    signal,
+    hist: line.map((x, i) =>
+      x != null && signal[i] != null ? x - signal[i] : null,
+    ),
+  };
+}
+// running (high + low + close) / 3 weighted by volume, started again whenever days[i] changes
+function taVwap(h, l, c, v, days) {
+  let day = null,
+    pv = 0,
+    vv = 0;
+  return c.map((_, i) => {
+    if (days[i] !== day) {
+      day = days[i];
+      pv = 0;
+      vv = 0;
+    }
+    const vol = Number(v[i]) || 0;
+    pv += ((h[i] + l[i] + c[i]) / 3) * vol;
+    vv += vol;
+    return vv > 0 ? pv / vv : null;
+  });
+}
+const TA_VWAP_TFS = ["1m", "5m", "15m", "30m", "1h", "4h"];
+const taVwapOk = (fx, tf) => !fx && TA_VWAP_TFS.includes(tf);
+const TA_SUBS = ["sgx-chart-rsi", "sgx-chart-macd"];
+// the RSI and MACD charts are rebuilt with the main chart, never added to
+function taIndClear() {
+  TA_SUBS.forEach((id) => {
+    if (charts[id]) {
+      try {
+        charts[id].remove();
+      } catch (_) {}
+      delete charts[id];
+    }
+    const el = $(id);
+    if (el) {
+      el.innerHTML = "";
+      el.style.display = "none";
+    }
+  });
+}
+// a price scale at least this wide on the main chart and the small ones keeps their time axes in line
+const taPsw = () =>
+  taInd.includes("rsi") || taInd.includes("macd") ? { minimumWidth: 64 } : {};
+function taIndLegend(ctx) {
+  const c = ctx || {};
+  return TA_INDS.filter(([k]) => taInd.includes(k) && !(k === "vwap" && c.fx))
+    .map(
+      ([k, , n]) =>
+        `<div><b>${esc(n)}:</b> ${esc(TA_IND_TESTED[k])}${k === "vwap" && !taVwapOk(c.fx, c.tf) ? " " + esc("Drawn on the 1m to 4h charts only.") : ""}</div>`,
+    )
+    .join("");
+}
+// rows: [{time, t (epoch seconds or null), h, l, c, v}] in chart order. Lines go on the main chart ch (left out of its
+// autoscale); RSI and MACD each get their own 110 px chart, time-synced both ways. o.daily = the old daily chart,
+// which already draws the 50 and 200-day lines.
+function taIndDraw(ch, rows, o) {
+  if (!taInd.length || !rows.length) return;
+  const on = (k) => taInd.includes(k),
+    cl = rows.map((r) => r.c),
+    ok = (x) => x != null && isFinite(x);
+  const line = (a, color, style) => {
+    const s = ch.addLineSeries({
+      color,
+      lineWidth: 1,
+      lineStyle: style || 0,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    s.setData(
+      a
+        .map((x, i) => (ok(x) ? { time: rows[i].time, value: x } : null))
+        .filter(Boolean),
+    );
+  };
+  try {
+    if (on("ma"))
+      [
+        [20, "#c08cff"],
+        [50, "#4da3ff"],
+        [200, "#ffb84d"],
+      ].forEach(([n, col]) => {
+        if (!(o.daily && n > 20)) line(taSma(cl, n), col);
+      });
+    if (on("ema")) {
+      line(taEma(cl, 9), "#ffd24d");
+      line(taEma(cl, 21), "#ff8a65");
+    }
+    if (on("bb")) {
+      const b = taBollinger(cl, 20, 2);
+      line(b.up, "#7fa6c9");
+      line(b.lo, "#7fa6c9");
+      line(b.mid, "#7fa6c9", 2);
+    }
+    if (on("vwap") && taVwapOk(o.fx, o.tf)) {
+      const days = rows.map((r) => taNYDate.format(new Date(r.t * 1000)));
+      line(
+        taVwap(
+          rows.map((r) => r.h),
+          rows.map((r) => r.l),
+          cl,
+          rows.map((r) => r.v),
+          days,
+        ),
+        "#e056fd",
+      );
+    }
+  } catch (_) {}
+  const subs = [];
+  const sub = (id) => {
+    const el = $(id);
+    if (!el || typeof LightweightCharts === "undefined") return null;
+    el.style.display = "";
+    el.innerHTML = "";
+    const date = typeof rows[0].time !== "number";
+    const sc = LightweightCharts.createChart(el, {
+      width: el.clientWidth || 340,
+      height: 110,
+      layout: {
+        background: { color: "transparent" },
+        textColor: o.txt,
+        fontSize: 11,
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: "transparent" },
+        horzLines: { color: o.line },
+      },
+      rightPriceScale: {
+        borderVisible: false,
+        minimumWidth: 64,
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
+      timeScale: date
+        ? { borderVisible: false }
+        : {
+            borderVisible: false,
+            timeVisible: true,
+            secondsVisible: false,
+            tickMarkFormatter: taTick,
+          },
+      ...(date
+        ? {}
+        : {
+            localization: {
+              timeFormatter: (t) => taF("full").format(new Date(t * 1000)),
+            },
+          }),
+      crosshair: { mode: 0 },
+      handleScroll: false,
+      handleScale: false,
+    });
+    charts[id] = sc;
+    if (chartRO) chartRO.observe(el);
+    subs.push(sc);
+    return sc;
+  };
+  // a bar with no value yet stays on the time axis as a blank, so the small charts line up with the main one
+  const full = (a) =>
+    a.map((x, i) =>
+      ok(x) ? { time: rows[i].time, value: x } : { time: rows[i].time },
+    );
+  try {
+    if (on("rsi")) {
+      const sc = sub("sgx-chart-rsi");
+      if (sc) {
+        const s = sc.addLineSeries({
+          color: "#4da3ff",
+          lineWidth: 1,
+          priceLineVisible: false,
+          title: "RSI 14",
+          autoscaleInfoProvider: () => ({
+            priceRange: { minValue: 0, maxValue: 100 },
+          }),
+        });
+        s.setData(full(taRsiWilder(cl, 14)));
+        [30, 70].forEach((price) =>
+          s.createPriceLine({
+            price,
+            color: o.txt,
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: false,
+            title: "",
+          }),
+        );
+      }
+    }
+    if (on("macd")) {
+      const sc = sub("sgx-chart-macd");
+      if (sc) {
+        const m = taMacd(cl, 12, 26, 9);
+        sc.addHistogramSeries({
+          priceLineVisible: false,
+          lastValueVisible: false,
+        }).setData(
+          rows.map((r, i) =>
+            ok(m.hist[i])
+              ? {
+                  time: r.time,
+                  value: m.hist[i],
+                  color: (m.hist[i] >= 0 ? o.up : o.dn) + "88",
+                }
+              : { time: r.time },
+          ),
+        );
+        sc.addLineSeries({
+          color: "#4da3ff",
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          title: "MACD",
+        }).setData(full(m.line));
+        sc.addLineSeries({
+          color: "#ffb84d",
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          title: "Signal",
+        }).setData(full(m.signal));
+      }
+    }
+    subs.forEach((sc) => {
+      sc.timeScale().setVisibleLogicalRange(o.range);
+      // main and small chart follow each other; the flag stops one move from echoing back forever
+      let busy = false;
+      const link = (a, b) =>
+        a.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+          if (busy || !r) return;
+          busy = true;
+          try {
+            b.timeScale().setVisibleLogicalRange(r);
+          } catch (_) {}
+          busy = false;
+        });
+      link(ch, sc);
+      link(sc, ch);
+    });
+  } catch (_) {}
+}
 async function drawIntraday(id, sym, seq) {
   const el = $(id);
   if (!el) return;
@@ -4167,6 +4541,7 @@ async function drawIntraday(id, sym, seq) {
     } catch (_) {}
     delete charts[id];
   }
+  taIndClear();
   delete chartC[id];
   if (!bars.length) {
     el.innerHTML = `<div class="empty">${esc(fx ? TA_EMPTY_FX : TA_EMPTY)}</div>`;
@@ -4181,7 +4556,7 @@ async function drawIntraday(id, sym, seq) {
     txt = cssVar("--muted", "#8a97a6"),
     line = cssVar("--line", "#2a3140");
   const dec = taDec(sym),
-    daily = tf === "1d";
+    daily = tf === "1d" || tf === "1w";
   const ch = LightweightCharts.createChart(el, {
     width: el.clientWidth || 340,
     height: el.clientHeight || 260,
@@ -4191,7 +4566,7 @@ async function drawIntraday(id, sym, seq) {
       fontSize: 11,
     },
     grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
-    rightPriceScale: { borderVisible: false },
+    rightPriceScale: { borderVisible: false, ...taPsw() },
     timeScale: daily
       ? { borderVisible: false }
       : {
@@ -4258,14 +4633,20 @@ async function drawIntraday(id, sym, seq) {
     false,
     key,
   );
-  ch.timeScale().setVisibleLogicalRange({
+  const rng = {
     from: Math.max(0, bars.length - (daily ? 130 : 80)),
     to: bars.length - 1,
-  });
+  };
+  ch.timeScale().setVisibleLogicalRange(rng);
+  taIndDraw(
+    ch,
+    bars.map(({ k, b }) => ({ time: k, t: b[0], h: b[2], l: b[3], c: b[4], v: b[5] })),
+    { fx, tf, daily: false, range: rng, up, dn, txt, line },
+  );
   const last = bars[bars.length - 1].b;
   if (legEl)
-    legEl.innerHTML = `${esc(taName(sym))} · ${esc(tf)} · last ${fmt(last[4], dec)} · ${daily ? "daily bars" : "times in " + (taTz === "Asia/Singapore" ? "Singapore time (SGT)" : "New York time (ET)")}`;
-  if (taEl()) taEl().innerHTML = taLegend(row, fx ? TA_FEED_FX : TA_FEED);
+    legEl.innerHTML = `${esc(taName(sym))} · ${esc(tf)} · last ${fmt(last[4], dec)} · ${daily ? (tf === "1w" ? "weekly bars" : "daily bars") : "times in " + (taTz === "Asia/Singapore" ? "Singapore time (SGT)" : "New York time (ET)")}`;
+  if (taEl()) taEl().innerHTML = taLegend(row, fx ? TA_FEED_FX : TA_FEED, { fx, tf });
   if (rdEl()) rdEl().innerHTML = taRead(row, sym);
 }
 // FX market on the Research tab: chart only (no fundamentals, news or orders). It never changes sgxSel or mkt,
@@ -4283,7 +4664,10 @@ function renderFx() {
   det.innerHTML = `<div class="sgx-h"><div class="nm">${esc(taName(fxSel))} <span class="sub">${esc(fxSel)}</span></div></div>
     <div class="chips" id="sgx-chart-tf" style="margin-top:8px"></div>
     <div class="chips" id="sgx-chart-ov" style="margin-top:4px"></div>
+    <div class="chips" id="sgx-chart-ind" style="margin-top:4px"></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
+    <div class="chartbox" id="sgx-chart-rsi" style="height:110px;display:none"></div>
+    <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
     <div class="sub chart-leg" id="sgx-chart-read"></div>
