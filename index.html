@@ -3970,14 +3970,45 @@ function taDrawRender(c) {
 // barTimes = the chart times of the bars on screen (ascending)
 function taDrawInit(c, ch, sym, barTimes) {
   c._dr = { ch, sym, bt: barTimes, ep: barTimes.map(taEpoch) };
-  try {
-    ch.subscribeClick((p) => taDrawClick(c, p, false));
-    // a second tap within about half a second arrives as a double click: it places a point as well
-    ch.subscribeDblClick((p) => taDrawClick(c, p, true));
-  } catch (_) {}
+  // Taps come from the browser's own click event, not the chart library's: the library drops a second tap that lands within
+  // about half a second of the first when the two are far apart. The box keeps one listener, so a rebuilt chart replaces it.
+  const el = $("sgx-chart");
+  if (el && el.addEventListener) {
+    if (el._drL) el.removeEventListener("click", el._drL);
+    el._drL = (e) => taDrawTap(c, ch, el, e);
+    el.addEventListener("click", el._drL);
+  }
   taDrawRender(c);
 }
-function taDrawClick(c, p, dbl) {
+// a browser click on the chart box -> a point inside the price pane (not on the price axis or the time axis)
+function taDrawTap(c, ch, el, e) {
+  if (!taDrawMode || !e || chartC["sgx-chart"] !== c || !c._dr) return;
+  try {
+    const r = el.getBoundingClientRect(),
+      ts = ch.timeScale(),
+      x = e.clientX - r.left,
+      y = e.clientY - r.top;
+    let pw = r.width,
+      ph = r.height;
+    try {
+      pw = ts.width();
+    } catch (_) {
+      try {
+        pw = r.width - ch.priceScale("right").width();
+      } catch (_) {}
+    }
+    try {
+      ph = r.height - ts.height();
+    } catch (_) {}
+    if (!taFin(x) || !taFin(y) || x < 0 || y < 0 || x >= pw || y >= ph) return;
+    let time = null;
+    try {
+      time = ts.coordinateToTime(x);
+    } catch (_) {}
+    taDrawClick(c, { point: { x, y }, time });
+  } catch (_) {}
+}
+function taDrawClick(c, p) {
   const x = c._dr;
   if (!taDrawMode || !x || chartC["sgx-chart"] !== c || !p || !p.point) return;
   let price;
@@ -3999,11 +4030,7 @@ function taDrawClick(c, p, dbl) {
     if (taDrawMode !== "line") return;
     t = Math.floor(Date.now() / 1000);
   }
-  const pt = { t, p: price },
-    last = c._drLast;
-  c._drLast = pt;
-  // the double click of a tap pair already handled as a click is not counted twice
-  if (dbl && last && last.t === t && Math.abs(last.p - price) <= 1e-6 * Math.max(1, Math.abs(price))) return;
+  const pt = { t, p: price };
   if (taDrawMode === "line") return taDrawAdd(x.sym, { type: "line", a: pt });
   if (!taDrawPend) {
     taDrawPend = pt;
