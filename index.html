@@ -3602,7 +3602,7 @@ async function drawChart(id, sym) {
     for (const x of ["-ta", "-read"]) { const b = $(id + x); if (b) b.innerHTML = ""; }   // nothing from an intraday view under the daily chart
   }
   let bars;
-  try { bars = await getBars(sym); } catch (_) { if (!stale()) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; if (id === "sgx-chart") taIndClear(); } return; }
+  try { bars = await getBars(sym); } catch (_) { if (!stale()) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; if (id === "sgx-chart") { taIndClear(); delete chartC[id]; } } return; }
   if (stale()) return;
   const live = sgxCache.res[sym]?.data;   // today's session so far, from the 5-minute price job
   if (bars.length && live && live.day && live.day_open && live.price) {
@@ -3612,7 +3612,7 @@ async function drawChart(id, sym) {
     else if (live.day === lastDay) bars = bars.slice(0, -1).concat([today]);
   }
   if ($(id) !== el) return;   // card re-rendered while loading
-  if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; if (id === "sgx-chart") taIndClear(); return; }
+  if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; if (id === "sgx-chart") { taIndClear(); delete chartC[id]; } return; }
   const n = (RANGES.find(r => r[0] === chartRng) || RANGES[1])[1];
   if (charts[id]) { try { charts[id].remove(); } catch (_) {} }
   if (id === "sgx-chart") taIndClear();
@@ -3880,11 +3880,38 @@ const taEpoch = (v) => {
     return Date.UTC(v.year, v.month - 1, v.day) / 1000;
   return NaN;
 };
-// index of the bar containing epoch t (the last bar contains everything after its start), -1 when t is before the series
-const taAnchor = (ep, t) => {
-  let r = -1;
-  for (let i = 0; i < ep.length && ep[i] <= t; i++) r = i;
-  return r;
+// epoch seconds of 00:00 New York on a "YYYY-MM-DD" date (a stock's daily or weekly bar starts there)
+const taNyMid = (d) => {
+  const u = Date.parse(d + "T00:00:00Z") / 1000;
+  for (const h of [4, 5]) {
+    const t = u + h * 3600;
+    if (taNYDate.format(new Date(t * 1000)) === d && taNYMin(t) === 0) return t;
+  }
+  return u + 5 * 3600;
+};
+// epoch of a chart time: stock date keys start at New York midnight, currency date keys at 00:00 UTC
+const taBarEp = (fx) => (v) =>
+  !fx && typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)
+    ? taNyMid(v)
+    : taEpoch(v);
+// the series' bar length: the smallest positive gap between consecutive bars
+const taBarLen = (ep) => {
+  let L = Infinity;
+  for (let i = 0; i + 1 < ep.length; i++) {
+    const g = ep[i + 1] - ep[i];
+    if (g > 0 && g < L) L = g;
+  }
+  return isFinite(L) ? L : 86400;
+};
+// index of the bar containing epoch t (a bar spans at most one bar length; a time in a gap belongs to the next bar; the
+// last bar contains everything after its start), -1 when t is before the series
+const taAnchor = (ep, t, L) => {
+  const n = ep.length;
+  for (let i = 0; i < n; i++) {
+    if (t < ep[i]) return i === 0 ? -1 : i;
+    if (i + 1 >= n || t < Math.min(ep[i + 1], ep[i] + L)) return i;
+  }
+  return -1;
 };
 // Draw every saved drawing of the chart's symbol on candle series c. Trend: a ray from the bar containing the earlier point to
 // the last bar, straight on screen (linear in bar index) when both points sit on different bars of this series, else linear in
@@ -3905,6 +3932,14 @@ function taDrawRender(c) {
   c._drLines = [];
   c._drSeries = [];
   const dec = taDec(x.sym);
+  // a stock's daily point saved at 00:00 UTC (an earlier build) is the New York midnight of the same date
+  const fix = (pt) =>
+    !x.fx && pt.t % 86400 === 0
+      ? {
+          t: taNyMid(new Date(pt.t * 1000).toISOString().slice(0, 10)),
+          p: pt.p,
+        }
+      : pt;
   const add = (pts) => {
     if (!pts.length) return;
     try {
@@ -3935,9 +3970,11 @@ function taDrawRender(c) {
           }),
         );
       } else if (d.type === "trend") {
-        const [p, q] = d.a.t <= d.b.t ? [d.a, d.b] : [d.b, d.a],
-          ia = taAnchor(x.ep, p.t),
-          ib = taAnchor(x.ep, q.t),
+        const A = fix(d.a),
+          B = fix(d.b),
+          [p, q] = A.t <= B.t ? [A, B] : [B, A],
+          ia = taAnchor(x.ep, p.t, x.L),
+          ib = taAnchor(x.ep, q.t, x.L),
           pts = [];
         if (ia >= 0 && ib >= 0 && ia !== ib) {
           const step = (q.p - p.p) / (ib - ia);
@@ -3950,15 +3987,17 @@ function taDrawRender(c) {
         }
         add(pts);
       } else {
-        const lo = Math.min(d.a.t, d.b.t),
-          hi = Math.max(d.a.t, d.b.t),
-          top = Math.max(d.a.p, d.b.p),
-          bot = Math.min(d.a.p, d.b.p),
+        const A = fix(d.a),
+          B = fix(d.b),
+          lo = Math.min(A.t, B.t),
+          hi = Math.max(A.t, B.t),
+          top = Math.max(A.p, B.p),
+          bot = Math.min(A.p, B.p),
           n = x.ep.length,
           ts = [];
         for (let i = 0; i < n; i++) {
           const end =
-            i + 1 < n ? x.ep[i + 1] : x.ep[i] + (n > 1 ? x.ep[i] - x.ep[i - 1] : 86400);
+            x.ep[i] + Math.min(i + 1 < n ? x.ep[i + 1] - x.ep[i] : x.L, x.L);
           if (x.ep[i] <= hi && end > lo) ts.push(x.bt[i]);
         }
         add(ts.map((tm) => ({ time: tm, value: top })));
@@ -3969,18 +4008,56 @@ function taDrawRender(c) {
 }
 // barTimes = the chart times of the bars on screen (ascending)
 function taDrawInit(c, ch, sym, barTimes) {
-  c._dr = { ch, sym, bt: barTimes, ep: barTimes.map(taEpoch) };
-  // Taps come from the browser's own click event, not the chart library's: the library drops a second tap that lands within
-  // about half a second of the first when the two are far apart. The box keeps one listener, so a rebuilt chart replaces it.
+  const fx = taIsFx(sym),
+    epOf = taBarEp(fx),
+    ep = barTimes.map(epOf);
+  c._dr = {
+    ch,
+    sym,
+    fx,
+    epOf,
+    bt: barTimes,
+    ep,
+    L: taBarLen(ep),
+    dated: typeof barTimes[0] === "string",
+  };
+  // Taps come from pointer events on the chart box, not the chart library's click (it drops a second quick tap) and not the
+  // browser's click (a phone tap on the chart is cancelled by the library, so no click follows). A tap = primary pointer
+  // down then up within 10 px; a second finger (pinch) or a cancel ends it. The box keeps one set of listeners, so a
+  // rebuilt chart replaces them.
   const el = $("sgx-chart");
   if (el && el.addEventListener) {
-    if (el._drL) el.removeEventListener("click", el._drL);
-    el._drL = (e) => taDrawTap(c, ch, el, e);
-    el.addEventListener("click", el._drL);
+    (el._drL || []).forEach(([n, f]) => el.removeEventListener(n, f));
+    let st = null;
+    const down = (e) => {
+      if (!e) return;
+      if (!e.isPrimary) {
+        st = null;
+        return;
+      }
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      st = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    };
+    const up = (e) => {
+      if (!e || !st || e.pointerId !== st.id) return;
+      const s = st;
+      st = null;
+      if (Math.hypot(e.clientX - s.x, e.clientY - s.y) >= 10) return;
+      taDrawTap(c, ch, el, { clientX: e.clientX, clientY: e.clientY });
+    };
+    const cancel = () => {
+      st = null;
+    };
+    el._drL = [
+      ["pointerdown", down],
+      ["pointerup", up],
+      ["pointercancel", cancel],
+    ];
+    el._drL.forEach(([n, f]) => el.addEventListener(n, f));
   }
   taDrawRender(c);
 }
-// a browser click on the chart box -> a point inside the price pane (not on the price axis or the time axis)
+// a tap on the chart box -> a point inside the price pane (not on the price axis, the time axis or the logo)
 function taDrawTap(c, ch, el, e) {
   if (!taDrawMode || !e || chartC["sgx-chart"] !== c || !c._dr) return;
   try {
@@ -4001,6 +4078,7 @@ function taDrawTap(c, ch, el, e) {
       ph = r.height - ts.height();
     } catch (_) {}
     if (!taFin(x) || !taFin(y) || x < 0 || y < 0 || x >= pw || y >= ph) return;
+    if (x < 40 && y > ph - 30) return; // the chart library's logo links away
     let time = null;
     try {
       time = ts.coordinateToTime(x);
@@ -4018,12 +4096,13 @@ function taDrawClick(c, p) {
     return;
   }
   if (!taFin(price)) return;
-  let t = taEpoch(p.time);
+  let t = x.epOf(p.time);
   if (!taFin(t) && x.ep.length && taFin(p.point.x)) {
     // a tap beside the bars (e.g. right of the last one) has no time: take the nearest bar
     try {
       const lg = x.ch.timeScale().coordinateToLogical(p.point.x);
-      if (taFin(lg)) t = x.ep[Math.min(x.ep.length - 1, Math.max(0, Math.round(lg)))];
+      if (taFin(lg))
+        t = x.ep[Math.min(x.ep.length - 1, Math.max(0, Math.round(lg)))];
     } catch (_) {}
   }
   if (!taFin(t)) {
@@ -4039,7 +4118,19 @@ function taDrawClick(c, p) {
   }
   if (pt.t === taDrawPend.t) return; // the same bar twice has no width
   const [e, l] = pt.t < taDrawPend.t ? [pt, taDrawPend] : [taDrawPend, pt]; // the earlier point is a
-  taDrawAdd(x.sym, { type: taDrawMode, a: e, b: l });
+  let b = l;
+  if (taDrawMode === "box" && x.dated) {
+    // on a daily or weekly chart the later corner is the END of its bar, so the box covers the whole bar
+    const i = taAnchor(x.ep, l.t, x.L);
+    if (i >= 0) {
+      const n = x.ep.length;
+      b = {
+        t: x.ep[i] + Math.min(i + 1 < n ? x.ep[i + 1] - x.ep[i] : x.L, x.L) - 1,
+        p: l.p,
+      };
+    }
+  }
+  taDrawAdd(x.sym, { type: taDrawMode, a: e, b });
 }
 function taDrawAdd(sym, d) {
   const list = taDrawLoad(sym);
@@ -4072,7 +4163,7 @@ function taDrawUndo() {
 function taDrawClear() {
   const sym = taSym();
   if (!sym || !taDrawLoad(sym).length) return;
-  if (!confirm("Remove all drawings for " + sym + "?")) return;
+  if (!confirm("Remove all drawings for " + taName(sym) + "?")) return;
   taDrawSave(sym, []);
   taDrawMode = null;
   taDrawPend = null;
@@ -4201,6 +4292,12 @@ async function taGet(sym, tf) {
 // Draw the enabled overlays of one row on a candle series c of chart ch. barTimes = the chart times of the bars on screen
 // (ascending); key maps an overlay's epoch-second t to a chart time. daily = true: the old daily chart keeps its own
 // level lines, so the row's own Levels are not drawn twice (its nearest daily support and resistance are).
+// a level from timeframe tf is drawn on the chart of timeframe cur only when it is one of the next 2 higher, or the daily
+const taHtfShow = (cur, tf) => {
+  const i = TA_TFS.indexOf(cur),
+    j = TA_TFS.indexOf(tf);
+  return i < 0 || j < 0 ? true : j > i && (j <= i + 2 || tf === "1d");
+};
 function taDraw(c, ch, row, barTimes, daily, key) {
   (c._ovLines || []).forEach((l) => {
     try {
@@ -4297,7 +4394,9 @@ function taDraw(c, ch, row, barTimes, daily, key) {
         if (x && x.tf) line(x.price, col, taTfName(x.tf) + sfx, 2, 1);
       });
     }
-    list("htf_levels").forEach((l) =>
+    list("htf_levels")
+      .filter((l) => taHtfShow(daily ? "1d" : taTf, l.tf))
+      .forEach((l) =>
       line(
         l.price,
         l.kind === "support" ? up : dn,
@@ -4424,7 +4523,10 @@ function taRead(row, sym) {
     rows.push(
       `Trend: ${tfs.map((k) => esc(taTfName(k)) + " " + esc(tb[k])).join(", ")}`,
     );
-  if (r.bias) rows.push(`Bias: ${esc(r.bias)}`);
+  if (r.bias)
+    rows.push(
+      `Bias (${taTf === "1w" ? "weekly" : taTf === "1d" ? "daily" : "4h and daily"}): ${esc(r.bias)}`,
+    );
   rows.push(
     `Nearest support: ${lv(r.nearest_support)}. Nearest resistance: ${lv(r.nearest_resistance)}`,
   );
@@ -4621,7 +4723,7 @@ const TA_IND_KEY = {
   rsi: [["rsi", "RSI 14 in the chart below, dashed at 30 and 70"]],
   macd: [["macd", "MACD line"], ["sig", "signal line"]],
 };
-const TA_VWAP_TFS = ["1m", "5m", "15m", "30m", "1h", "4h"];
+const TA_VWAP_TFS = ["1m", "5m", "15m", "30m"];
 const taVwapOk = (fx, tf) => !fx && TA_VWAP_TFS.includes(tf);
 const TA_SUBS = ["sgx-chart-rsi", "sgx-chart-macd"];
 // the RSI and MACD charts are rebuilt with the main chart, never added to
@@ -4648,7 +4750,7 @@ function taIndLegend(ctx) {
   return TA_INDS.filter(([k]) => taInd.includes(k) && !(k === "vwap" && c.fx))
     .map(
       ([k, , n]) =>
-        `<div><b>${esc(n)}:</b> ${esc(TA_IND_TESTED[k])}${k === "vwap" && !taVwapOk(c.fx, c.tf) ? " " + esc("Drawn on the 1m to 4h charts only.") : ""}<br>${TA_IND_KEY[k]
+        `<div><b>${esc(n)}:</b> ${esc(TA_IND_TESTED[k])}${k === "vwap" && !taVwapOk(c.fx, c.tf) ? " " + esc("Drawn on the 1m to 30m charts only.") : ""}<br>${TA_IND_KEY[k]
           .filter((x, i) => !(k === "ma" && i > 0 && !c.fx && (c.tf === undefined || c.tf === "1d")))
           .map(([col, name]) => `<i style="background:${TA_IND_COL[col]}"></i>${esc(name)}`)
           .join("")}</div>`,
@@ -4898,6 +5000,7 @@ async function drawIntraday(id, sym, seq) {
   taIndClear();
   delete chartC[id];
   if (!bars.length) {
+    taVwapShort = false;
     el.innerHTML = `<div class="empty">${esc(fx ? TA_EMPTY_FX : TA_EMPTY)}</div>`;
     if (legEl) legEl.innerHTML = "";
     if (taEl()) taEl().innerHTML = "";
