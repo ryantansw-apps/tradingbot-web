@@ -2649,7 +2649,7 @@ const ORD_ST = { queued: ["Waiting for laptop", ""], sending: ["Sending", ""], w
   rejected: ["Refused", "down"], expired: ["Expired", ""], error: ["Failed", "down"], unknown: ["Check Tiger app", "down"] };
 async function loadOrders() {
   const { data, error } = await sb.from("tb_tiger_orders").select("*").order("id", { ascending: false }).limit(10);
-  if (error) { $("ord-list").innerHTML = `<div class="empty">Could not load orders.</div>`; return; }
+  if (error) { $("ord-list").innerHTML = `<div class="empty">Could not load orders.</div>`; ordRows = []; taTradeRefresh(); return; }
   ordRows = data || []; taTradeRefresh();
   $("ord-list").innerHTML = (data || []).map(o => {
     const [lab, c] = ORD_ST[o.status] || [o.status, ""];
@@ -4304,7 +4304,9 @@ function taDrawUi(sym) {
 // confirm and its single tb_tiger_orders insert are the only way an order is queued. No stop or bracket order is sent.
 let taTk = null, // the open ticket: {sym, side, px, qty, plan: {stop, target, side} | null}
   ordRows = []; // the last read of tb_tiger_orders (loadOrders), for working-order lines
-const TA_TK_WORKING = ["queued", "sending", "working", "partially filled"];
+const TA_TK_WORKING = ["queued", "sending", "working", "partially filled"],
+  TA_TK_NOHOLD =
+    "Holdings not loaded yet, so this cannot check what you hold (passcode: Alpaca bot tab, then Controls, then Passcode). Selling more than you hold is refused.";
 // price tick: US 0.01; SGX 0.001 under S$0.20, 0.005 under S$1.00, else 0.01
 const taTkTick = (px, us) => (us || px >= 1 ? 0.01 : px < 0.2 ? 0.001 : 0.005);
 const taTkRound = (px, us) => {
@@ -4315,7 +4317,8 @@ const taTkDec = (px, us) => (taTkTick(px, us) < 0.01 ? 3 : 2);
 const taHoldKnown = () => !!(holdRow && holdRow.data && Array.isArray(holdRow.data.positions));
 const taHoldOf = (sym) => {
   const P = (holdRow && holdRow.data && holdRow.data.positions) || [],
-    ccy = sym.endsWith(".SI") ? "SGD" : "USD";
+    d = sgxCache.res[sym] && sgxCache.res[sym].data, // a USD-quoted SGX counter is held in USD
+    ccy = d && d.currency ? ordCur(d) : sym.endsWith(".SI") ? "SGD" : "USD";
   return P.filter(
     (p) =>
       p && p.kind === "STK" && p.symbol && (!p.currency || p.currency === ccy) && (p.symbol === sym || shortSym(String(p.symbol)) === shortSym(sym)),
@@ -4358,12 +4361,13 @@ function taTradeRender(c) {
     },
     f = (v) => fmt(v, taTkDec(v, us));
   if (taTk && taTk.sym === x.sym) {
-    if (taTk.plan) {
+    if (taTk.plan && c._row !== undefined) {
       const cur = taPlan(c);
       if (!cur || (cur.long ? "BUY" : "SELL") !== taTk.plan.side) taTk.plan = null;
       else {
         taTk.plan.stop = cur.stop;
         taTk.plan.target = cur.target;
+        taTk.plan.mid = taTkRound(cur.mid, us);
       }
     }
     if (taTkSig(c, x.sym) !== taTk.sig) {
@@ -4445,8 +4449,15 @@ function taTkEst() {
   let w = "";
   if (taTk.side === "SELL") {
     if (!taHoldKnown())
-      w = "Holdings not loaded yet: enter your passcode in Portfolio to check what you hold. Selling more than you hold is refused.";
+      w = TA_TK_NOHOLD;
     else if (q > taHeld(taTk.sym)) w = "Selling short is not possible in this account.";
+    else {
+      const open = ordRows
+        .filter((o) => o && o.symbol === taTk.sym && !o.strategy && o.side === "SELL" && TA_TK_WORKING.includes(o.status))
+        .reduce((a, o) => a + (Number(o.qty) || 0), 0);
+      if (open > 0 && open + q > taHeld(taTk.sym))
+        w = "You already have sell orders for " + open + " shares; Tiger refuses selling more than you hold.";
+    }
   }
   if (px > 0 && d.price && Math.abs(px / d.price - 1) > 0.1)
     w += (w ? " " : "") + "This limit is more than 10% from the last price: orders that far from it are refused.";
@@ -4466,6 +4477,7 @@ function taTkEst() {
 function taTkIn() {
   taTkSync();
   taTkEst();
+  taFsFit();
   taTradeRefresh();
 }
 function taTkSide(sd) {
@@ -4485,7 +4497,7 @@ function taTkPlan() {
   taTk.side = plan.long ? "BUY" : "SELL";
   if (!plan.long) taTk.qty = Math.max(1, Math.min(taTk.qty, Math.floor(held)));
   taTk.px = taTkRound(plan.mid, !taTk.sym.endsWith(".SI"));
-  taTk.plan = { stop: plan.stop, target: plan.target, side: taTk.side };
+  taTk.plan = { stop: plan.stop, target: plan.target, side: taTk.side, mid: taTk.px };
   taTkUi();
   taTradeRefresh();
 }
@@ -4511,9 +4523,9 @@ function taTkUi() {
     planH =
       plan.long || held > 0
         ? `<div class="chips" style="margin-top:6px">${chip("Use the plan", "taTkPlan()", false)}</div>`
-        : `<div class="sub" style="margin-top:6px">Selling short is not possible in this account.</div>`;
+        : `<div class="sub" style="margin-top:6px">${taHoldKnown() ? "Selling short is not possible in this account." : esc(TA_TK_NOHOLD)}</div>`;
   if (t.plan)
-    planH += `<div class="sub" style="margin-top:6px">Plan: ${t.side === "BUY" ? "buy" : "sell"} near ${esc(fmt(t.px, dec))}. Stop ${esc(fmt(t.plan.stop, dec))}, target ${esc(fmt(t.plan.target, dec))}.</div>`;
+    planH += `<div class="sub" style="margin-top:6px">Plan: ${t.side === "BUY" ? "buy" : "sell"} near ${esc(fmt(t.plan.mid, dec))}. Stop ${esc(fmt(t.plan.stop, dec))}, target ${esc(fmt(t.plan.target, dec))} (a textbook plan; tested no better than random entries).</div>`;
   el.innerHTML = `<div style="margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:10px">
     <div class="chips" style="align-items:center"><b style="font-size:13px">Order ticket</b><span class="sub">practice account</span>${chip("Buy", "taTkSide('BUY')", t.side === "BUY")}${chip("Sell", "taTkSide('SELL')", t.side === "SELL")}</div>
     <div class="ord-f">
