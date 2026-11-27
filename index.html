@@ -223,7 +223,7 @@
     .ta-tfs .up { color: var(--up); }
     .ta-tfs .down { color: var(--down); }
     .ta-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin-top: 4px; }
-    .ta-lnk { color: var(--accent); text-decoration: underline; cursor: pointer; }
+    button.ta-lnk { background: none; border: 0; padding: 0; margin: 0; font: inherit; width: auto; color: var(--accent); text-decoration: underline; cursor: pointer; }
     .ta-ex { margin-top: 8px; font-size: 12px; }
     .ta-ex summary { cursor: pointer; color: var(--accent); }
     .ta-ex .ta-exi { margin-top: 8px; }
@@ -3633,7 +3633,7 @@ async function drawChart(id, sym) {
     taSizeMain();
     taControls(sym);
     if (taIsFx(sym) || (!sym.endsWith(".SI") && taTf !== "1d")) return drawIntraday(id, sym, seq);
-    for (const x of ["-ta", "-read"]) { const b = $(id + x); if (b) b.innerHTML = ""; }   // nothing from an intraday view under the daily chart
+    for (const x of sym.endsWith(".SI") ? ["-ta", "-read"] : ["-read"]) { const b = $(id + x); if (b) b.innerHTML = ""; }   // nothing from an intraday view under the daily chart
   }
   let bars;
   try { bars = await getBars(sym); } catch (_) { if (!stale()) { el.innerHTML = `<div class="empty">Could not load chart.</div>`; if (id === "sgx-chart") { taIndClear(); taHdClear(); delete chartC[id]; } } return; }
@@ -3694,7 +3694,7 @@ async function drawChart(id, sym) {
       // indicators from the daily bars this chart already has; its own 50 and 200-day lines are not drawn twice
       taIndDraw(ch, bars.map(b => ({ time: b[0], t: null, h: b[2], l: b[3], c: b[4], v: b[5] })),
         { fx: false, tf: "1d", daily: true, dec: 2, range: rng, up, dn, txt, line });
-      const taE = $(id + "-ta"); if (taE) taE.innerHTML = taIndLegend({ fx: false, tf: "1d" });
+      const taE = $(id + "-ta"); if (taE) taPanelSet(taE, taLegend(null, TA_DAILY_NOTE, { fx: false, tf: "1d" }));
       taDaily(id, sym, c, bars, seq);
     }
     taFsFit();
@@ -3773,6 +3773,7 @@ const TA_EXPLAIN = [
   ["VWAP", "The average price paid today from the 9:30 New York open, weighted by volume. Large traders compare their fills with it. Shown on 1m to 30m stock charts.", TA_IND_TESTED.vwap],
   ["RSI", "A 0 to 100 gauge of recent up moves against down moves over 14 candles. Above 70 is called overbought, below 30 oversold.", TA_IND_TESTED.rsi],
   ["MACD", "The gap between a fast (12) and a slow (26) moving average, with its own 9-candle average (the signal line). Crossings are read as momentum turning.", TA_IND_TESTED.macd],
+  ["About the data", "Stock prices are real-time from one exchange (IEX), so highs, lows and volume can differ slightly from the full market. Currency prices come from Yahoo and run a few minutes late. Daily-chart overlays are worked out from IEX daily bars, so a gap or zone can differ slightly from the candles shown. Charts update about every minute while the laptop is on.", ""],
 ];
 const TA_EX_KEY = "tb_ta_ex";
 const taExOn = () => {
@@ -5006,6 +5007,18 @@ function taDraw(c, ch, row, barTimes, daily, key) {
     taTradeRender(c);
   } catch (_) {}
 }
+// Writes the panel. When the explainer is already on screen only the head above it is replaced, so an open
+// explainer is not rebuilt (no collapse, no page jump) on every refresh.
+function taPanelSet(el, html) {
+  const i = html.lastIndexOf("</div><details"),
+    d = el.querySelector && el.querySelector("details"),
+    h = el.querySelector && el.querySelector(".ta-head");
+  if (i < 0 || !d || !h) {
+    el.innerHTML = html;
+    return;
+  }
+  h.innerHTML = html.slice(html.indexOf(">") + 1, i);
+}
 function taLegend(row, note, ctx) {
   const when =
     row && row.updated_at
@@ -5017,9 +5030,10 @@ function taLegend(row, note, ctx) {
         taZone()
       : "unknown";
   return (
-    `<div style="margin-top:8px">Every layer on this chart tested no better than random entries. <span class="ta-lnk" onclick="taExOpen()">What do these mean?</span></div>` +
+    `<div class="ta-head"><div style="margin-top:8px">Every layer on this chart tested no better than random entries. <button type="button" class="ta-lnk" onclick="taExOpen()">What do these mean?</button></div>` +
     `<div class="sub" style="margin-top:4px">${note ? esc(note) + " · " : ""}updated ${esc(when)}</div>` +
     taIndLegend(ctx) +
+    "</div>" +
     taExplain()
   );
 }
@@ -5098,7 +5112,7 @@ async function taDaily(id, sym, c, bars, seq) {
     taKey(sym, "1d"),
   );
   const el = $(id + "-ta");
-  if (el) el.innerHTML = taLegend(row, TA_DAILY_NOTE, { fx: false, tf: "1d" });
+  if (el) taPanelSet(el, taLegend(row, TA_DAILY_NOTE, { fx: false, tf: "1d" }));
   const rd = $(id + "-read");
   if (rd) rd.innerHTML = taRead(row, sym);
 }
@@ -5646,7 +5660,7 @@ async function drawIntraday(id, sym, seq) {
   const last = bars[bars.length - 1].b;
   if (legEl)
     legEl.innerHTML = `${esc(taName(sym))} · ${esc(tf)} · last ${fmt(last[4], dec)} · ${daily ? (tf === "1w" ? "weekly bars" : "daily bars") : "times in " + (taTz === "Asia/Singapore" ? "Singapore time (SGT)" : "New York time (ET)")}`;
-  if (taEl()) taEl().innerHTML = taLegend(row, fx ? TA_FEED_FX : TA_FEED, { fx, tf });
+  if (taEl()) taPanelSet(taEl(), taLegend(row, fx ? TA_FEED_FX : TA_FEED, { fx, tf }));
   if (rdEl()) rdEl().innerHTML = taRead(row, sym);
 }
 // FX market on the Research tab: chart only (no fundamentals, news or orders). It never changes sgxSel or mkt,
