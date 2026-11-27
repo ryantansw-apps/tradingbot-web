@@ -3982,8 +3982,9 @@ function taDraw(c, ch, row, barTimes, daily, key) {
       ),
     );
   if (on("patterns")) {
+    const recent = new Set(barTimes.slice(-20));
     const ps = list("patterns")
-      .filter((x) => has.has(key(x.t)))
+      .filter((x) => has.has(key(x.t)) && recent.has(key(x.t)))
       .sort((a, b) => a.t - b.t);
     ps.forEach((x, i) => {
       const neutral = x.side === "neutral",
