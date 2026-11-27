@@ -202,6 +202,10 @@
     .chartbox { width: 100%; height: 260px; margin-top: 8px; position: relative; }
     .chartbox .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
     .chart-leg { font-size: 12px; margin-top: 4px; }
+    .sgx-fs { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh; z-index: 40; background: var(--bg); overflow-y: auto; box-sizing: border-box; padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+    #sgx-fs #sgx-chart-blk { display: flex; flex-direction: column; min-height: 100%; }
+    #sgx-fs #sgx-chart-blk > * { flex-shrink: 0; }
+    #sgx-fs #sgx-chart { flex: 1 0 220px; height: auto; }
     .indbox { width: 100%; height: 130px; margin-top: 8px; }
     .chart-leg i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin: 0 4px 0 8px; }
     header h1 { font-size: 16px; font-weight: 700; letter-spacing: .3px; }
@@ -631,6 +635,7 @@
 </main>
 <div class="upd" id="upd" onclick="window.location.reload()">New version ready · tap to update</div>
 <div class="toast" id="toast"></div>
+<div class="sgx-fs" id="sgx-fs"></div>
 
 <div id="confirm-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;align-items:center;justify-content:center;padding:20px">
   <div style="background:var(--panel2,#1c2230);border:1px solid var(--line,#333);border-radius:12px;max-width:420px;width:100%;padding:18px">
@@ -1232,6 +1237,7 @@ let sgxPending = false;   // a refresh arrived while a field in the detail had f
 const sgxTyping = () => { const a = document.activeElement; return !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.closest("#sgx-detail")); };
 document.addEventListener("focusout", () => { if (sgxPending) setTimeout(() => { if (sgxPending && !sgxTyping()) renderSgx(); }, 350); });
 function renderSgx(poll) {
+  taFsClose();   // the card is redrawn below: a chart in full screen goes back first
   if (fxOn) return renderFx();
   const live = sgxCache.wl.filter(r => r.enabled && inMkt(r)), parked = sgxCache.wl.filter(r => !r.enabled && inMkt(r));
   $("sgx-chips").innerHTML = live.map(r => {
@@ -1341,14 +1347,17 @@ function sgxDetail(d) {
   return `<div class="sgx-h"><div class="nm">${esc(d.name)} <span class="sub">${esc(d.symbol)}</span></div>
       <div class="px">${sgd(d.price)} <span class="${cls(chg)}" style="font-size:14px">${chg == null ? "" : signed(chg * 100, 2, true)}</span></div>
       <div class="sub">${d.price_at ? `price read ${esc(pxWhen(d.price_at))}${d.currency === "USD" ? "" : " (SGX about 10 min late)"} · ` : ""}${esc(d.industry || d.sector || "")} · market cap ${bigS(d.market_cap)}${d.div_yield != null ? ` · <b>dividend yield ${fmt(d.div_yield, 2)}%</b>` : ""}${figH > 96 ? ` · <span class="warn">company figures ${ago(d.as_of)} old</span>` : ""}</div></div>
+    <div id="sgx-chart-blk">
     <div class="chips" id="sgx-chart-tf" style="margin-top:8px"></div>
     <div class="chips" id="sgx-chart-ov" style="margin-top:4px"></div>
     <div class="chips" id="sgx-chart-ind" style="margin-top:4px"></div>
+    <div class="sub chart-leg" id="sgx-chart-hd" style="min-height:1.3em;margin-top:6px"></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chartbox" id="sgx-chart-rsi" style="height:110px;display:none"></div>
     <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
     <div class="chips" id="sgx-chart-draw" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-draw-n"></div>
+    </div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
     <div class="sub chart-leg" id="sgx-chart-read"></div>
@@ -3597,6 +3606,7 @@ async function drawChart(id, sym) {
   const seq = id === "sgx-chart" ? (taSeq[id] = (taSeq[id] || 0) + 1) : 0;   // a newer draw (another chip) makes this one stale
   const stale = () => id === "sgx-chart" && taSeq[id] !== seq;
   if (id === "sgx-chart") {
+    taSizeMain();
     taControls(sym);
     if (taIsFx(sym) || (!sym.endsWith(".SI") && taTf !== "1d")) return drawIntraday(id, sym, seq);
     for (const x of ["-ta", "-read"]) { const b = $(id + x); if (b) b.innerHTML = ""; }   // nothing from an intraday view under the daily chart
@@ -3614,6 +3624,7 @@ async function drawChart(id, sym) {
   if ($(id) !== el) return;   // card re-rendered while loading
   if (!bars.length) { el.innerHTML = `<div class="empty">No chart yet for ${esc(sym)}. It appears after the next hourly refresh.</div>`; if (id === "sgx-chart") { taIndClear(); delete chartC[id]; } return; }
   const n = (RANGES.find(r => r[0] === chartRng) || RANGES[1])[1];
+  if (id === "sgx-chart") taViewSave(id);
   if (charts[id]) { try { charts[id].remove(); } catch (_) {} }
   if (id === "sgx-chart") taIndClear();
   el.innerHTML = "";
@@ -3622,8 +3633,8 @@ async function drawChart(id, sym) {
     width: el.clientWidth || 340, height: el.clientHeight || 260,
     layout: { background: { color: "transparent" }, textColor: txt, fontSize: 11 },
     grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
-    rightPriceScale: { borderVisible: false, ...(id === "sgx-chart" && !sym.endsWith(".SI") ? taPsw() : {}) }, timeScale: { borderVisible: false },
-    crosshair: { mode: 0 }, handleScroll: false, handleScale: false,
+    rightPriceScale: { borderVisible: false, ...(id === "sgx-chart" && !sym.endsWith(".SI") ? taPsw() : {}) }, timeScale: { borderVisible: false, ...(id === "sgx-chart" ? { rightOffset: 5 } : {}) },
+    crosshair: { mode: 0 }, ...(id === "sgx-chart" ? TA_NAV : { handleScroll: false, handleScale: false }),
   });
   charts[id] = ch; if (chartRO) chartRO.observe(el);
   const c = ch.addCandlestickSeries({ upColor: up, downColor: dn, wickUpColor: up, wickDownColor: dn, borderVisible: false });
@@ -3636,7 +3647,14 @@ async function drawChart(id, sym) {
   m50.setData(sma(bars, 50));
   const m200 = ch.addLineSeries({ color: "#ffb84d", lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
   m200.setData(sma(bars, 200));
-  ch.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - n), to: bars.length - 1 });
+  const bt = bars.map(b => b[0]), dflt = { from: Math.max(0, bars.length - n), to: bars.length - 1 };
+  let rng = dflt;
+  if (id === "sgx-chart") {
+    rng = taViewRange(sym + "|1d|" + chartRng, bt, dflt);
+    ch._vk = sym + "|1d|" + chartRng; ch._bt = bt; ch._dflt = dflt;
+    taReadout(ch, bars.map(b => ({ time: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] })), { dec: sym.endsWith(".SI") ? 3 : 2, fx: false });
+  }
+  ch.timeScale().setVisibleLogicalRange(rng);
   const rngEl = $(id + "-rng");
   if (rngEl) rngEl.innerHTML = RANGES.map(([k]) => `<div class="chip ${k === chartRng ? "sel" : ""}" style="padding:4px 12px" onclick="setChartRng('${k}')">${k}</div>`).join("");
   const last = bars[bars.length - 1], first = bars[Math.max(0, bars.length - n)];
@@ -3649,7 +3667,7 @@ async function drawChart(id, sym) {
     if (!sym.endsWith(".SI")) {
       // indicators from the daily bars this chart already has; its own 50 and 200-day lines are not drawn twice
       taIndDraw(ch, bars.map(b => ({ time: b[0], t: null, h: b[2], l: b[3], c: b[4], v: b[5] })),
-        { fx: false, tf: "1d", daily: true, dec: 2, range: { from: Math.max(0, bars.length - n), to: bars.length - 1 }, up, dn, txt, line });
+        { fx: false, tf: "1d", daily: true, dec: 2, range: rng, up, dn, txt, line });
       const taE = $(id + "-ta"); if (taE) taE.innerHTML = taIndLegend({ fx: false, tf: "1d" });
       taDaily(id, sym, c, bars, seq);
     }
@@ -4200,6 +4218,151 @@ function taDrawUi(sym) {
             : TA_DRAW_HINT[taDrawMode]) + " "
         : "") + "Drawings are saved on this device only.";
 }
+// ---- Research chart view: a tall chart you can zoom and scroll, kept across rebuilds, full screen, and the candle readout.
+// Dragging sideways pans; a vertical drag over the chart still scrolls the page (vertTouchDrag off).
+const TA_NAV = {
+  handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+  handleScale: {
+    mouseWheel: true,
+    pinch: true,
+    axisPressedMouseMove: { time: true, price: true },
+    axisDoubleClickReset: { time: true, price: true },
+  },
+};
+const taMainH = () => Math.round(Math.min(Math.max(window.innerHeight * 0.6, 320), 640));
+let taFs = false, // full screen open
+  taFsPush = false, // a history entry was added for it
+  taFsPrev = null, // page scroll and overflow to give back
+  taView = null; // the view of the chart that is being rebuilt
+// the main chart's height in normal view; in full screen the box fills what the controls leave
+function taSizeMain() {
+  const el = $("sgx-chart");
+  if (el && el.style) el.style.height = taFs ? "" : taMainH() + "px";
+}
+// Before the old chart is removed: where was the reader looking? end = the right edge sat within 2 bars of the last bar.
+function taViewSave(id) {
+  taView = null;
+  const old = id === "sgx-chart" ? charts[id] : null;
+  if (!old || !old._vk || !old._bt) return;
+  try {
+    const r = old.timeScale().getVisibleLogicalRange(),
+      n = old._bt.length;
+    if (!r || !taFin(r.from) || !taFin(r.to) || !n) return;
+    const i = Math.min(n - 1, Math.max(0, Math.round(r.to)));
+    taView = { k: old._vk, w: r.to - r.from, t: old._bt[i], d: r.to - i, end: r.to >= n - 3, off: r.to - (n - 1) };
+  } catch (_) {}
+}
+// The range for the new chart: the saved view when it is the same symbol and timeframe, else dflt (the latest bars).
+// A reader at the right edge stays at the newest bar; any other view stays on the same candles.
+function taViewRange(key, bt, dflt) {
+  const v = taView;
+  taView = null;
+  if (!v || v.k !== key || !bt.length) return dflt;
+  if (v.end) {
+    const to = bt.length - 1 + v.off;
+    return { from: to - v.w, to };
+  }
+  const i = bt.indexOf(v.t);
+  if (i < 0) return dflt;
+  return { from: i + v.d - v.w, to: i + v.d };
+}
+function taLatest() {
+  const ch = charts["sgx-chart"];
+  if (!ch || !ch._dflt) return;
+  try {
+    ch.timeScale().setVisibleLogicalRange(ch._dflt);
+  } catch (_) {}
+}
+function taFsRefresh() {
+  taSizeMain();
+  const s = taSym();
+  if (s) taControls(s);
+}
+// The chart block (chips, chart, RSI/MACD, Draw row) is moved, not copied, so every handler and id keeps working.
+function taFsOpen() {
+  const blk = $("sgx-chart-blk"),
+    box = $("sgx-fs");
+  if (taFs || !blk || !box || !blk.parentNode) return;
+  const ph = document.createElement("div");
+  ph.id = "sgx-fs-ph";
+  ph.style.display = "none";
+  blk.parentNode.insertBefore(ph, blk);
+  box.appendChild(blk);
+  box.style.display = "block";
+  taFsPrev = { y: window.scrollY, b: document.body.style.overflow, h: document.documentElement.style.overflow };
+  document.body.style.overflow = "hidden";
+  document.documentElement.style.overflow = "hidden";
+  taFs = true;
+  try {
+    history.pushState({ taFs: 1 }, "");
+    taFsPush = true;
+  } catch (_) {
+    taFsPush = false;
+  }
+  taFsRefresh();
+}
+function taFsClose(fromPop) {
+  if (!taFs) return;
+  taFs = false;
+  const box = $("sgx-fs"),
+    blk = box && box.firstElementChild,
+    ph = $("sgx-fs-ph");
+  if (blk && ph && ph.parentNode) ph.parentNode.replaceChild(blk, ph);
+  else {
+    if (ph) ph.remove(); // the card was redrawn meanwhile: the old block goes, the new one is already in place
+    if (blk) blk.remove();
+  }
+  if (box) box.style.display = "none";
+  if (taFsPrev) {
+    document.body.style.overflow = taFsPrev.b;
+    document.documentElement.style.overflow = taFsPrev.h;
+    try {
+      window.scrollTo(0, taFsPrev.y);
+    } catch (_) {}
+    taFsPrev = null;
+  }
+  if (taFsPush) {
+    taFsPush = false;
+    if (!fromPop)
+      try {
+        history.back();
+      } catch (_) {}
+  }
+  taFsRefresh();
+}
+const taFsToggle = () => (taFs ? taFsClose() : taFsOpen());
+const taNavChips = () =>
+  `<div class="chip" style="padding:4px 12px" onclick="taLatest()">Latest</div><div class="chip ${taFs ? "sel" : ""}" style="padding:4px 12px" onclick="taFsToggle()">${taFs ? "Close" : "Full screen"}</div>`;
+// Candle readout above the chart. recs = [{time, o, h, l, c, v}] in chart order; prev = the previous close (or null).
+const taVolFmt = (v) =>
+  v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : String(Math.round(v));
+function taCandleLine(r, prev, o) {
+  const when = typeof r.time === "number" ? taF("full").format(new Date(r.time * 1000)) + " " + taZone() : String(r.time),
+    chg = prev ? (r.c / prev - 1) * 100 : null,
+    vol = Number(r.v);
+  return (
+    `<b>${esc(when)}</b> O ${fmt(r.o, o.dec)} H ${fmt(r.h, o.dec)} L ${fmt(r.l, o.dec)} C ${fmt(r.c, o.dec)}` +
+    (chg == null ? "" : ` <b class="${cls(chg)}">${signed(chg, 2, true)}</b>`) +
+    (o.fx || r.v == null || !taFin(vol) ? "" : ` V ${esc(taVolFmt(vol))}`)
+  );
+}
+// the candle under the finger or mouse; the latest candle when the crosshair is away
+function taReadout(ch, recs, o) {
+  const idx = new Map(recs.map((r, i) => [String(r.time), i])),
+    show = (i) => {
+      const e = $("sgx-chart-hd");
+      if (e && recs[i]) e.innerHTML = taCandleLine(recs[i], i > 0 ? recs[i - 1].c : null, o);
+    };
+  show(recs.length - 1);
+  try {
+    ch.subscribeCrosshairMove((p) => {
+      let t = p && p.time;
+      if (t && typeof t === "object") t = t.year + "-" + String(t.month).padStart(2, "0") + "-" + String(t.day).padStart(2, "0");
+      const i = t == null ? undefined : idx.get(String(t));
+      show(i == null ? recs.length - 1 : i);
+    });
+  } catch (_) {}
+}
 function taControls(sym) {
   const tf = $("sgx-chart-tf"),
     ov = $("sgx-chart-ov"),
@@ -4211,7 +4374,7 @@ function taControls(sym) {
     taDrawPend = null;
   }
   if (sym.endsWith(".SI")) {
-    tf.innerHTML = "";
+    tf.innerHTML = taNavChips();
     ov.innerHTML = "";
     if (ind) ind.innerHTML = "";
     taDrawUi(sym);
@@ -4225,7 +4388,7 @@ function taControls(sym) {
   tf.innerHTML = TA_TFS.map(
     (k) =>
       `<div class="chip ${k === taTf ? "sel" : ""}" style="padding:4px 12px" onclick="setTaTf('${k}')">${k}</div>`,
-  ).join("");
+  ).join("") + taNavChips();
   ov.innerHTML =
     TA_OVS.map(
       ([k, n]) =>
@@ -4991,6 +5154,7 @@ async function drawIntraday(id, sym, seq) {
       bars[bars.length - 1] = { k, b };
     else bars.push({ k, b });
   });
+  taViewSave(id);
   if (charts[id]) {
     try {
       charts[id].remove();
@@ -5000,6 +5164,8 @@ async function drawIntraday(id, sym, seq) {
   taIndClear();
   delete chartC[id];
   if (!bars.length) {
+    const hd = $("sgx-chart-hd");
+    if (hd) hd.innerHTML = "";
     taVwapShort = false;
     el.innerHTML = `<div class="empty">${esc(fx ? TA_EMPTY_FX : TA_EMPTY)}</div>`;
     if (legEl) legEl.innerHTML = "";
@@ -5025,9 +5191,10 @@ async function drawIntraday(id, sym, seq) {
     grid: { vertLines: { color: "transparent" }, horzLines: { color: line } },
     rightPriceScale: { borderVisible: false, ...taPsw() },
     timeScale: daily
-      ? { borderVisible: false }
+      ? { borderVisible: false, rightOffset: 5 }
       : {
           borderVisible: false,
+          rightOffset: 5,
           timeVisible: true,
           secondsVisible: false,
           tickMarkFormatter: taTick,
@@ -5040,8 +5207,7 @@ async function drawIntraday(id, sym, seq) {
           },
         }),
     crosshair: { mode: 0 },
-    handleScroll: false,
-    handleScale: false,
+    ...TA_NAV,
   });
   charts[id] = ch;
   if (chartRO) chartRO.observe(el);
@@ -5096,10 +5262,20 @@ async function drawIntraday(id, sym, seq) {
     sym,
     bars.map((x) => x.k),
   );
-  const rng = {
-    from: Math.max(0, bars.length - (daily ? 130 : 80)),
-    to: bars.length - 1,
-  };
+  const bt = bars.map((x) => x.k),
+    dflt = {
+      from: Math.max(0, bars.length - (daily ? 130 : 80)),
+      to: bars.length - 1,
+    },
+    rng = taViewRange(sym + "|" + tf, bt, dflt);
+  ch._vk = sym + "|" + tf;
+  ch._bt = bt;
+  ch._dflt = dflt;
+  taReadout(
+    ch,
+    bars.map(({ k, b }) => ({ time: k, o: b[1], h: b[2], l: b[3], c: b[4], v: fx ? null : b[5] })),
+    { dec, fx },
+  );
   ch.timeScale().setVisibleLogicalRange(rng);
   taIndDraw(
     ch,
@@ -5123,16 +5299,20 @@ function renderFx() {
   ).join("");
   const det = $("sgx-detail");
   if (det.dataset.fx === fxSel && $("sgx-chart")) return;
+  taFsClose();
   det.dataset.fx = fxSel;
   det.innerHTML = `<div class="sgx-h"><div class="nm">${esc(taName(fxSel))} <span class="sub">${esc(fxSel)}</span></div></div>
+    <div id="sgx-chart-blk">
     <div class="chips" id="sgx-chart-tf" style="margin-top:8px"></div>
     <div class="chips" id="sgx-chart-ov" style="margin-top:4px"></div>
     <div class="chips" id="sgx-chart-ind" style="margin-top:4px"></div>
+    <div class="sub chart-leg" id="sgx-chart-hd" style="min-height:1.3em;margin-top:6px"></div>
     <div class="chartbox" id="sgx-chart"><div class="empty">Loading chart…</div></div>
     <div class="chartbox" id="sgx-chart-rsi" style="height:110px;display:none"></div>
     <div class="chartbox" id="sgx-chart-macd" style="height:110px;display:none"></div>
     <div class="chips" id="sgx-chart-draw" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-draw-n"></div>
+    </div>
     <div class="chips" id="sgx-chart-rng" style="margin-top:6px"></div>
     <div class="sub chart-leg" id="sgx-chart-leg"></div>
     <div class="sub chart-leg" id="sgx-chart-read"></div>
@@ -5196,7 +5376,8 @@ const chartRO = typeof ResizeObserver === "undefined" ? null : new ResizeObserve
   for (const e of entries) { const ch = charts[e.target.id]; const w = Math.floor(e.contentRect.width);
     if (ch && w > 0) { ch.applyOptions({ width: w, height: Math.floor(e.contentRect.height) || 260 }); } }
 });
-window.addEventListener("resize", () => { for (const [id, ch] of Object.entries(charts)) { const el = $(id); if (el && el.clientWidth) ch.applyOptions({ width: el.clientWidth }); } });
+window.addEventListener("resize", () => { taSizeMain(); for (const [id, ch] of Object.entries(charts)) { const el = $(id); if (el && el.clientWidth) ch.applyOptions({ width: el.clientWidth }); } });
+window.addEventListener("popstate", () => { if (taFs) taFsClose(true); });   // the browser Back button closes full screen
 
 // ---- Trade journal: a private log of the reader's own buys (table tb_journal, passcode for
 // reading and writing). It records and measures what the reader did; it never suggests anything.
